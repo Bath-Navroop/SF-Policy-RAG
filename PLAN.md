@@ -2,7 +2,7 @@
 
 > **Purpose of this file:** This is the complete plan for a resume project, written so that a future chat session (or any collaborator) can pick it up and continue building without re-deriving decisions. Drop it into the repo root as `PLAN.md` (and optionally copy the "Instructions for the AI assistant" section into `CLAUDE.md`).
 >
-> **Author:** Nav · **Plan written:** 2026-09-23 · **Status:** Week 0 complete (2026-09-26). Now on Weeks 1–2 (Ingestion).
+> **Author:** Nav · **Plan written:** 2026-09-23 · **Status:** Week 0 complete (2026-09-26). Now on Weeks 1–2 (Ingestion). **2026-09-26 update:** DGOs are HTML pages, not PDFs — ingestion now uses BeautifulSoup and `5.01.03`-style section numbers (see Section 2).
 
 ---
 
@@ -24,7 +24,7 @@ Read this section first in any new chat.
 
 ## 1. Project summary
 
-**What it is:** A question-answering web app that answers questions about San Francisco Police Department policy and SF police-related law. Every answer cites the exact document and section it came from (e.g., "DGO 5.01, §III.B"), and says "I don't know" when the documents don't cover the question.
+**What it is:** A question-answering web app that answers questions about San Francisco Police Department policy and SF police-related law. Every answer cites the exact document and section it came from (e.g., "DGO 5.01, §5.01.03"), and says "I don't know" when the documents don't cover the question.
 
 **Working name:** *SF Police Policy Explorer* (unofficial, independent project — **not** affiliated with SFPD).
 
@@ -62,6 +62,13 @@ Read this section first in any new chat.
 | 2 | SF Police Code | Part of SF Municipal Code most related to policing | Large; many articles | https://codelibrary.amlegal.com/codes/san_francisco/latest/sf_police/0-0-0-2 |
 | Stretch | CA Penal Code / Vehicle Code (selected sections) | State law often referenced by DGOs | Pick sections only | leginfo.legislature.ca.gov |
 
+**What the DGO pages actually look like (checked 2026-09-26):**
+- **No PDFs.** Each order has its own HTML page (e.g. `https://www.sanfranciscopolice.org/your-sfpd/policies/general-orders/10-11`) with the **full policy text on the page**. PDF copies are only available via a public records request, so ingestion parses HTML with BeautifulSoup — pypdf is not needed for DGOs (kept installed in case Phase 2 bulletins turn out to be PDFs).
+- **Listing page:** all orders on one page, no pagination, grouped by category. Each entry shows dates like `(Revised 9/4/24)(Effective 10/19/24)` — parse the effective date from there with a regex.
+- **URL slugs aren't always clean** (e.g. Community Policing is `/general-orders/1-08-0`). Build `doc_id` (`DGO-1.08`) from the order number in the link text/title, not the slug.
+- **Section numbering:** headings are `<order>.<nn> TITLE` in bold paragraphs (not `<h2>` tags), e.g. `5.01.01 PURPOSE`, `5.01.02 POLICY`, `5.01.03 DEFINITIONS`. Sub-items are numbered `1.`, `2.` with lettered `a.`, `b.` below them. Some sections contain tables.
+- **robots.txt** (checked 2026-09-26): only admin, login, search and similar Drupal paths are disallowed; no crawl-delay. General Orders pages are allowed. Still read the site's terms of use before bulk downloading.
+
 **Example DGOs (good for first tests and eval questions):**
 - DGO 5.01 — Use of Force Policy and Proper Control of a Person
 - DGO 5.05 — Emergency Response and Pursuit Driving
@@ -87,7 +94,7 @@ Two paths: **ingestion** (offline, run when documents change) and **query** (onl
 ```mermaid
 flowchart LR
   subgraph Ingestion["Ingestion (offline)"]
-    A[Download DGO PDFs<br/>+ manifest] --> B[Extract text<br/>pypdf]
+    A[Download DGO HTML pages<br/>+ manifest] --> B[Extract text<br/>BeautifulSoup]
     B --> C[Clean + detect<br/>section headings]
     C --> D[Chunk by section<br/>with metadata]
     D --> E[Embed chunks]
@@ -109,8 +116,8 @@ flowchart LR
 
 | Component | Responsibility | Location |
 |---|---|---|
-| Downloader | Fetch DGO PDFs, write manifest | `ingest/download.py` |
-| Parser | PDF → clean text, detect section structure | `ingest/parse.py` |
+| Downloader | Fetch DGO HTML pages (cached in `data/raw/`), write manifest | `ingest/download.py` |
+| Parser | HTML → clean text, detect section structure | `ingest/parse.py` |
 | Chunker | Split into section-aware chunks with metadata | `ingest/chunk.py` |
 | Embedder | Batch-embed chunks, write to DB | `ingest/embed.py` |
 | Retriever | Vector search, keyword search, hybrid fusion | `app/retrieval.py` |
@@ -122,10 +129,10 @@ flowchart LR
 
 ### Chunking strategy (important for legal/policy text)
 
-- **Split on section structure first**, not fixed word counts. DGOs use headings like `I. PURPOSE`, `II. POLICY`, `III. DEFINITIONS`, with sub-items `A.`, `1.`, `a.`. Detect these with regex.
+- **Split on section structure first**, not fixed word counts. DGOs use headings like `5.01.01 PURPOSE`, `5.01.02 POLICY`, `5.01.03 DEFINITIONS` (bold paragraphs in the HTML), with sub-items `1.`, `a.`. Detect these with regex (e.g. a line starting with `\d+\.\d+\.\d+` followed by an uppercase title) — or from the bold tags if that proves more reliable.
 - If a section is longer than the max chunk size (start: ~400 words), split it further with ~50 words overlap.
-- **Prepend context to each chunk** before embedding: `"DGO 10.11 Body Worn Cameras — III.B Activation: <text>"`. This greatly improves retrieval.
-- Store per chunk: `doc_id`, `doc_title`, `section_path` (e.g., `III.B.2`), `effective_date`, `source_url`, `page_number`, `chunk_index`.
+- **Prepend context to each chunk** before embedding: `"DGO 5.01 Use of Force — 5.01.03 Definitions: <text>"`. This greatly improves retrieval.
+- Store per chunk: `doc_id`, `doc_title`, `section_path` (e.g., `5.01.03`, or `5.01.03.2.a` for a sub-item — proposed format), `effective_date`, `source_url`, `chunk_index`. (`page_number` doesn't apply to HTML pages; the column stays in the schema as NULL for DGOs.)
 
 ### Retrieval strategy (evolves over phases)
 
@@ -143,7 +150,7 @@ Rules:
 - This is general information, not legal advice.
 
 Sources:
-[1] DGO 10.11 Body Worn Cameras — III.B Activation (effective 2024-xx-xx)
+[1] DGO 5.01 Use of Force — 5.01.03 Definitions (effective 2024-10-19)
 <chunk text>
 [2] ...
 
@@ -164,7 +171,7 @@ The app maps `[n]` back to `source_url` + `section_path` to render clickable cit
 | Database | Postgres 16 + pgvector | Text, metadata, vectors, full-text search in one DB | Chroma |
 | DB access | psycopg 3 (raw SQL) → optionally SQLAlchemy later | Learn SQL directly first | SQLAlchemy from start |
 | Local DB | Docker Compose, image `pgvector/pgvector:pg16` | One command to start | Postgres.app |
-| PDF parsing | `pypdf` (fallback: `pdfplumber` for tricky layouts) | Simple | `unstructured` |
+| Page parsing | `beautifulsoup4` for the DGO HTML pages (`pypdf` kept for any PDF sources in Phase 2) | DGOs are HTML, not PDF (checked 2026-09-26) | `unstructured` |
 | HTML parsing | `httpx` + `beautifulsoup4` | Fetch listing pages | `requests` |
 | Embeddings | **Gemini Embedding 1 or Embedding 2** (free tier: 100 RPM / 30K TPM / 1,000 RPD — either works, pick one and stick with it; `.env.example` defaults to Embedding 1). **Decided 2026-09-26: stay with Gemini** (see local-embeddings note below) | $0 on the free tier. The binding limit is 30K tokens/min: ~1,500 chunks × ~525 tokens ≈ 790K tokens ≈ 26–30 min to embed everything, far under the 1,000 RPD cap | OpenAI `text-embedding-3-small` (1536 dims, ~$0.02/1M tokens) — cheaper per-token if you go paid, but no free tier |
 | LLM | **Gemini 3.1 Flash Lite or Gemini 3.5 Flash Lite, free tier** (`GEMINI_API_KEY`); model name in env var `LLM_MODEL` | **$0 during dev/eval**, no card required. Confirmed from account dashboard (checked 2026-09-24): 15 req/min, 250K tokens/min, **500 req/day** — enough for a full 100-question eval run in one sitting. The non-Lite "full" Flash models (3.5/3.6/3.7/3.8 Flash) are much more restricted on this account — only 5 RPM / 20 RPD — too low for eval work. | OpenAI/Anthropic paid model — no rate cap (matters once real users show up in weeks 11–12), and the paid tier doesn't use your content to improve the provider's models |
@@ -214,7 +221,7 @@ SF-Policy-RAG/              # GitHub: Bath-Navroop/SF-Policy-RAG
 ├── .github/workflows/ci.yml
 ├── data/
 │   ├── manifest.csv
-│   └── raw/                # downloaded PDFs (gitignored if large)
+│   └── raw/                # downloaded DGO HTML pages, e.g. DGO-5.01.html (gitignored if large)
 ├── ingest/
 │   ├── download.py
 │   ├── parse.py
@@ -268,9 +275,9 @@ CREATE TABLE documents (
 CREATE TABLE chunks (
   id            BIGSERIAL PRIMARY KEY,
   document_id   TEXT REFERENCES documents(id) ON DELETE CASCADE,
-  section_path  TEXT,                        -- e.g. 'III.B.2'
+  section_path  TEXT,                        -- e.g. '5.01.03' or '5.01.03.2.a'
   section_title TEXT,
-  page_number   INT,
+  page_number   INT,                         -- NULL for HTML sources (DGOs)
   chunk_index   INT NOT NULL,
   content       TEXT NOT NULL,
   embedding     vector(3072),                -- 3072 = Gemini Embedding 1/2 (1536 if switching to OpenAI text-embedding-3-small)
@@ -312,9 +319,11 @@ Rate limit `/ask` (start: 10 requests/minute per client). Validate question leng
 ### Eval question format (`evals/questions.jsonl`, one JSON per line)
 
 ```json
-{"id": "q001", "question": "When must officers activate body-worn cameras?", "type": "lookup", "expected_answer": "Short reference answer written by Nav.", "expected_sources": ["DGO-10.11"], "expected_sections": ["III.B"]}
+{"id": "q001", "question": "When must officers activate body-worn cameras?", "type": "lookup", "expected_answer": "Short reference answer written by Nav.", "expected_sources": ["DGO-10.11"], "expected_sections": ["10.11.xx"]}
 {"id": "q087", "question": "What is SFPD's policy on drone deliveries of pizza?", "type": "unanswerable", "expected_answer": null, "expected_sources": [], "expected_sections": []}
 ```
+
+(`10.11.xx` is a placeholder — use the real section number from the DGO page when writing questions.)
 
 **Question mix (100 total):** ~60 `lookup` (one document), ~25 `multi` (needs 2+ documents/sections), ~15 `unanswerable`.
 
@@ -356,9 +365,11 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
 - Skills refresh if needed: Python basics, Git (commit/branch/PR), terminal, HTTP/JSON, basic SQL (SQLBolt).
 
 ### Weeks 1–2 — Ingestion (current phase)
-- [ ] Check https://www.sanfranciscopolice.org/robots.txt (and site terms) allow fetching the General Orders pages.
-- [ ] `download.py`: scrape the General Orders page for PDF links; download **10 DGOs first**; write `manifest.csv` (id, title, url, effective date if shown).
-- [ ] `parse.py`: extract text per page with pypdf; strip headers/footers/page numbers; normalize whitespace.
+- [x] Check https://www.sanfranciscopolice.org/robots.txt — done 2026-09-26: General Orders pages allowed, no crawl-delay (see Section 2).
+- [ ] Read the site's terms of use before bulk downloading.
+- [ ] Explore the pages by hand first: Inspect the listing links and the element holding the policy text on one DGO page; try `httpx` + `BeautifulSoup` in `uv run python`.
+- [ ] `download.py`: scrape the General Orders listing for `/general-orders/` links; download **10 DGO pages first** to `data/raw/DGO-x.xx.html` (skip if already saved; User-Agent; 1–2 s delay); write `manifest.csv` (doc_id, title, source_url, effective_date from the listing text, downloaded_at). Build `doc_id` from the order number, not the URL slug.
+- [ ] `parse.py`: extract the policy body from each saved HTML page with BeautifulSoup; drop site navigation/footer; keep section headings (`5.01.03 DEFINITIONS`) on their own lines; handle tables; normalize whitespace.
 - [ ] Inspect output by eye for 3 documents. Fix cleaning issues.
 - [ ] `chunk.py`: detect section headings with regex; build section-aware chunks with metadata and context prefix.
 - [ ] Tests: `test_chunk.py` (splits on headings, respects max size, overlap correct, metadata present).
@@ -476,7 +487,7 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
 | Risk | Fallback |
 |---|---|
 | Stuck for days on setup/deploy | Timebox 2 sessions, then ask the AI assistant with the exact error |
-| PDFs parse badly (tables, columns) | Try `pdfplumber`; hand-fix the worst few; note it in README |
+| Some DGO pages have odd HTML (tables, headings not bold, inconsistent markup) | Detect headings by regex on the extracted text instead of tags; hand-fix the worst few; note it in README |
 | Section heading regex misses formats | Log unmatched docs; fall back to fixed-size chunks for those |
 | Municipal code terms forbid scraping | Stay with DGOs + bulletins; manually save a few Police Code sections |
 | API bill surprises | Hard limit; use small model for most eval runs; Gemini free tier avoids this entirely for the LLM |
