@@ -1,0 +1,31 @@
+[project]
+name = "sf-police-policy-explorer"
+version = "0.1.0"
+description = "RAG Q&A over SFPD policy documents, with citations."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.3",
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "pypdf>=4.3",
+    "google-genai>=0.3",
+    "openai>=1.40",
+    "python-dotenv>=1.0",
+    "slowapi>=0.1.9",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
