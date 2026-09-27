@@ -1,11 +1,8 @@
 """Database connection, shared by the ingestion scripts and (later) the API."""
 
-import os
-
 import psycopg
-from dotenv import load_dotenv
 
-load_dotenv()  # Copies the values in .env into environment variables (if .env exists).
+from app import config
 
 
 def get_connection() -> psycopg.Connection:
@@ -14,7 +11,6 @@ def get_connection() -> psycopg.Connection:
     autocommit=True means each statement is saved immediately, unless we group
     statements with `with conn.transaction():`, which saves them all or none.
     """
-    url = os.environ.get("DATABASE_URL")
-    if not url:
+    if not config.DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not set. Copy .env.example to .env and fill it in.")
-    return psycopg.connect(url, autocommit=True)
+    return psycopg.connect(config.DATABASE_URL, autocommit=True)
