@@ -10,14 +10,19 @@ CREATE TABLE IF NOT EXISTS documents (
   title           TEXT NOT NULL,
   source_type     TEXT NOT NULL,             -- 'dgo' | 'bulletin' | 'police_code'
   source_url      TEXT NOT NULL,
-  effective_date  DATE,
+  effective_date  DATE,                      -- NULL if the listing only shows a revised date
+  revised_date    DATE,
   downloaded_at   TIMESTAMPTZ DEFAULT now()
 );
+
+-- For databases created before revised_date existed (CREATE TABLE IF NOT EXISTS
+-- won't change an existing table). Makes this whole file safe to re-run.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS revised_date DATE;
 
 CREATE TABLE IF NOT EXISTS chunks (
   id            BIGSERIAL PRIMARY KEY,
   document_id   TEXT REFERENCES documents(id) ON DELETE CASCADE,
-  section_path  TEXT,                        -- e.g. 'III.B.2'
+  section_path  TEXT,                        -- e.g. '10.11.05', '10.11.05.B-D' or 'III.B'
   section_title TEXT,
   page_number   INT,
   chunk_index   INT NOT NULL,

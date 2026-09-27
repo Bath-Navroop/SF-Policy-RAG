@@ -2,7 +2,7 @@
 
 > **Purpose of this file:** This is the complete plan for a resume project, written so that a future chat session (or any collaborator) can pick it up and continue building without re-deriving decisions. Drop it into the repo root as `PLAN.md` (and optionally copy the "Instructions for the AI assistant" section into `CLAUDE.md`).
 >
-> **Author:** Nav · **Plan written:** 2026-09-23 · **Status:** Week 0 complete (2026-09-26). Now on Weeks 1–2 (Ingestion). **2026-09-27:** working style changed — the assistant writes the code and Nav learns by reading and asking questions (Section 0). **2026-09-26 update:** DGOs are HTML pages, not PDFs — ingestion now uses BeautifulSoup and `5.01.03`-style section numbers (see Section 2).
+> **Author:** Nav · **Plan written:** 2026-09-23 · **Status:** Week 0 complete (2026-09-26). **Weeks 1–2 (Ingestion) complete 2026-09-27:** 113 documents and 857 chunks in local Postgres (no embeddings yet). Now on Weeks 3–4: next is `embed.py`. **2026-09-27:** working style changed — the assistant writes the code and Nav learns by reading and asking questions (Section 0). **2026-09-26 update:** DGOs are HTML pages, not PDFs — ingestion now uses BeautifulSoup and `5.01.03`-style section numbers (see Section 2).
 
 ---
 
@@ -61,7 +61,7 @@ Read this section first in any new chat.
 
 | Phase | Source | What it is | Size | URL |
 |---|---|---|---|---|
-| 1 | SFPD Department General Orders (DGOs) | SFPD's official policy rulebook | ~70+ orders across 11 categories | https://www.sanfranciscopolice.org/your-sfpd/policies/general-orders |
+| 1 | SFPD Department General Orders (DGOs) | SFPD's official policy rulebook | 113 orders (current versions; checked 2026-09-27) | https://www.sanfranciscopolice.org/your-sfpd/policies/general-orders |
 | 2 | SFPD Department Bulletins & Notices | Interim updates that modify policies between DGO revisions (organized by year) | Hundreds; start with last 2–3 years | https://www.sanfranciscopolice.org/your-sfpd/policies/department-bulletins-notices |
 | 2 | SF Police Code | Part of SF Municipal Code most related to policing | Large; many articles | https://codelibrary.amlegal.com/codes/san_francisco/latest/sf_police/0-0-0-2 |
 | Stretch | CA Penal Code / Vehicle Code (selected sections) | State law often referenced by DGOs | Pick sections only | leginfo.legislature.ca.gov |
@@ -71,7 +71,8 @@ Read this section first in any new chat.
 - **Listing page:** all orders on one page, no pagination, grouped by category. Each entry shows dates like `(Revised 9/4/24)(Effective 10/19/24)` — parse the effective date from there with a regex.
 - **URL slugs aren't always clean** (e.g. Community Policing is `/general-orders/1-08-0`). Build `doc_id` (`DGO-1.08`) from the order number in the link text/title, not the slug.
 - **Section numbering:** headings are `<order>.<nn> TITLE` in bold paragraphs (not `<h2>` tags), e.g. `5.01.01 PURPOSE`, `5.01.02 POLICY`, `5.01.03 DEFINITIONS`. Sub-items are numbered `1.`, `2.` with lettered `a.`, `b.` below them. Some sections contain tables.
-- **robots.txt** (checked 2026-09-26): only admin, login, search and similar Drupal paths are disallowed; no crawl-delay. General Orders pages are allowed. Still read the site's terms of use before bulk downloading.
+- **robots.txt** (checked 2026-09-26): only admin, login, search and similar Drupal paths are disallowed; no crawl-delay. General Orders pages are allowed. Nav read the site's terms of use (2026-09-27) before the full download.
+- **Some orders are listed twice** (checked 2026-09-27): an old version and a newer one at a URL ending in `-0` — 5.08, 5.20, 5.23, 6.13, 6.16, 8.12 (e.g. 5.08 "Non-Uniformed Officers", revised 1996, vs. 5.08 "Plainclothes, Non-Uniformed, and Undercover Officers", effective 2026-05-21). `download.py` keeps only the newest version by effective date (falling back to revised date) and prints a note for each.
 
 **Example DGOs (good for first tests and eval questions):**
 - DGO 5.01 — Use of Force Policy and Proper Control of a Person
@@ -86,7 +87,7 @@ Read this section first in any new chat.
 **Data rules:**
 - Before bulk-downloading, check each site's terms of use and `robots.txt`. The DGOs are on the city's own site. The municipal code is hosted by American Legal Publishing; read their terms before scraping — if bulk download isn't allowed, use a smaller set of manually saved sections.
 - Download politely: add delays between requests (1–2 s), identify with a User-Agent, cache raw files locally so you never re-download unnecessarily.
-- **Keep raw files in `data/raw/` and commit a manifest (`data/manifest.csv`: doc_id, title, source_url, effective_date, downloaded_at), not necessarily the files themselves.**
+- **Keep raw files in `data/raw/` and commit a manifest (`data/manifest.csv`: doc_id, title, source_url, revised_date, effective_date, downloaded_at), not necessarily the files themselves.**
 - **Do NOT include** DataSF incident reports or any data about individuals. This project is about rules and policies only.
 
 ---
@@ -135,6 +136,7 @@ flowchart LR
 
 - **Split on section structure first**, not fixed word counts. DGOs use headings like `5.01.01 PURPOSE`, `5.01.02 POLICY`, `5.01.03 DEFINITIONS` (bold paragraphs in the HTML), with sub-items `1.`, `a.`. Detect these with regex (e.g. a line starting with `\d+\.\d+\.\d+` followed by an uppercase title) — or from the bold tags if that proves more reliable.
 - If a section is longer than the max chunk size (start: ~400 words), split it further with ~50 words overlap.
+- **As built (2026-09-27, `ingest/chunk.py`):** (1) a section ≤ 400 words is one chunk; (2) a longer section is split into units — each top-level item (A., B., 1. …) with everything nested under it, or a plain paragraph/table row — and neighbouring units are packed up to 400 words without cutting a unit; (3) a single unit over 400 words is cut into word windows with 50-word overlap (line breaks kept). Section paths: `10.11.05` (whole section), `10.11.05.B` (one item), `10.11.05.A-C` (group of items). The context prefix is added only by `embedding_text()` at embedding time, not stored in `content`, so the with/without-prefix experiment needs re-embedding only. Result: 857 chunks, 5–400 words (median 221); 94 chunks under 40 words (mostly one-line purpose statements) kept as whole sections for now — revisit if evals show they add noise.
 - **Prepend context to each chunk** before embedding: `"DGO 5.01 Use of Force — 5.01.03 Definitions: <text>"`. This greatly improves retrieval.
 - Store per chunk: `doc_id`, `doc_title`, `section_path` (e.g., `5.01.03`, or `5.01.03.2.a` for a sub-item — proposed format), `effective_date`, `source_url`, `chunk_index`. (`page_number` doesn't apply to HTML pages; the column stays in the schema as NULL for DGOs.)
 
@@ -177,7 +179,7 @@ The app maps `[n]` back to `source_url` + `section_path` to render clickable cit
 | Local DB | Docker Compose, image `pgvector/pgvector:pg16` | One command to start | Postgres.app |
 | Page parsing | `beautifulsoup4` for the DGO HTML pages (`pypdf` kept for any PDF sources in Phase 2) | DGOs are HTML, not PDF (checked 2026-09-26) | `unstructured` |
 | HTML parsing | `httpx` + `beautifulsoup4` | Fetch listing pages | `requests` |
-| Embeddings | **Gemini Embedding 1 or Embedding 2** (free tier: 100 RPM / 30K TPM / 1,000 RPD — either works, pick one and stick with it; `.env.example` defaults to Embedding 1). **Decided 2026-09-26: stay with Gemini** (see local-embeddings note below) | $0 on the free tier. The binding limit is 30K tokens/min: ~1,500 chunks × ~525 tokens ≈ 790K tokens ≈ 26–30 min to embed everything, far under the 1,000 RPD cap | OpenAI `text-embedding-3-small` (1536 dims, ~$0.02/1M tokens) — cheaper per-token if you go paid, but no free tier |
+| Embeddings | **Gemini Embedding 1 or Embedding 2** (free tier: 100 RPM / 30K TPM / 1,000 RPD — either works, pick one and stick with it; `.env.example` defaults to Embedding 1). **Decided 2026-09-26: stay with Gemini** (see local-embeddings note below) | $0 on the free tier. The binding limit is 30K tokens/min: **Measured 2026-09-27 from the parsed corpus:** 113 DGOs, 484 sections, ~181K words (~1.18M chars). At 400-word chunks with 50-word overlap that's **~790 chunks (actual: 857) ≈ ~330K tokens** (incl. overlap + context prefixes, ~415 tokens/chunk) ≈ 11 min at the 30K TPM cap, **~13–15 min** with safety margin; ~16 requests of ~50 chunks. (200-word chunks ≈ 1,380 chunks; 800-word ≈ 590.) Replaces the earlier ~790K-token / 26–30 min guess. **To verify on the first run:** whether a 50-chunk batch counts as 1 or 50 toward the 1,000 RPD cap — if per chunk, one full run fits in a day but chunk-size experiments may need to spread over two days | OpenAI `text-embedding-3-small` (1536 dims, ~$0.02/1M tokens) — cheaper per-token if you go paid, but no free tier |
 | LLM | **Gemini 3.1 Flash Lite or Gemini 3.5 Flash Lite, free tier** (`GEMINI_API_KEY`); model name in env var `LLM_MODEL` | **$0 during dev/eval**, no card required. Confirmed from account dashboard (checked 2026-09-24): 15 req/min, 250K tokens/min, **500 req/day** — enough for a full 100-question eval run in one sitting. The non-Lite "full" Flash models (3.5/3.6/3.7/3.8 Flash) are much more restricted on this account — only 5 RPM / 20 RPD — too low for eval work. | OpenAI/Anthropic paid model — no rate cap (matters once real users show up in weeks 11–12), and the paid tier doesn't use your content to improve the provider's models |
 | Keyword search | Postgres full-text (`tsvector`, GIN index) | Built in | `rank_bm25` |
 | Rate limiting | `slowapi` | Protect API credit on public demo | Custom middleware |
@@ -230,6 +232,7 @@ SF-Policy-RAG/              # GitHub: Bath-Navroop/SF-Policy-RAG
 │   ├── download.py
 │   ├── parse.py
 │   ├── chunk.py
+│   ├── load.py             # documents + chunks into Postgres (no embeddings)
 │   └── embed.py
 ├── app/
 │   ├── main.py             # FastAPI routes
@@ -248,7 +251,7 @@ SF-Policy-RAG/              # GitHub: Bath-Navroop/SF-Policy-RAG
 ├── sql/
 │   └── schema.sql
 └── tests/
-    ├── test_chunk.py
+    ├── test_chunk.py       # done (9 tests)
     ├── test_parse.py
     └── test_api.py
 ```
@@ -262,7 +265,7 @@ SF-Policy-RAG/              # GitHub: Bath-Navroop/SF-Policy-RAG
 - **Speed:** an exact scan measured ~10–15 ms on 2,000 synthetic 3072-dim vectors — a tiny fraction of the question-embedding call (hundreds of ms) and the LLM call (1–3 s).
 - **Quality:** full dimensions keep the most embedding quality. Google reports shortened Gemini embeddings (1,536 / 768) lose only a little, but here that trade would buy nothing.
 
-**If the corpus grows** to tens of thousands of chunks, or storage gets tight on Supabase's 500 MB free tier (a 3072-dim vector is ~12 KB; 2,000 chunks ≈ 27 MB): switch the column to `halfvec(3072)` with an HNSW index (keeps all dimensions, about half the storage, works on current pgvector), or to 1,536 dims if evals show no accuracy loss. Measure with the eval harness before switching (see Weeks 9–10).
+**If the corpus grows** to tens of thousands of chunks, or storage gets tight on Supabase's 500 MB free tier (a 3072-dim vector is ~12 KB; the measured ~790 chunks ≈ 10 MB, 2,000 chunks ≈ 27 MB): switch the column to `halfvec(3072)` with an HNSW index (keeps all dimensions, about half the storage, works on current pgvector), or to 1,536 dims if evals show no accuracy loss. Measure with the eval harness before switching (see Weeks 9–10).
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -368,21 +371,21 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
 - [x] Git: commits use the GitHub noreply email (`git config --global user.email`), because GitHub blocks pushes that expose a private email. Week 0 work committed and pushed.
 - Skills refresh if needed: Python basics, Git (commit/branch/PR), terminal, HTTP/JSON, basic SQL (SQLBolt).
 
-### Weeks 1–2 — Ingestion (current phase)
+### Weeks 1–2 — Ingestion ✅ complete 2026-09-27
 - [x] Check https://www.sanfranciscopolice.org/robots.txt — done 2026-09-26: General Orders pages allowed, no crawl-delay (see Section 2).
-- [ ] Read the site's terms of use before bulk downloading.
-- [ ] Explore the pages by hand first: Inspect the listing links and the element holding the policy text on one DGO page; try `httpx` + `BeautifulSoup` in `uv run python`.
-- [ ] `download.py`: scrape the General Orders listing for `/general-orders/` links; download **10 DGO pages first** to `data/raw/DGO-x.xx.html` (skip if already saved; User-Agent; 1–2 s delay); write `manifest.csv` (doc_id, title, source_url, effective_date from the listing text, downloaded_at). Build `doc_id` from the order number, not the URL slug.
-- [ ] `parse.py`: extract the policy body from each saved HTML page with BeautifulSoup; drop site navigation/footer; keep section headings (`5.01.03 DEFINITIONS`) on their own lines; handle tables; normalize whitespace.
-- [ ] Inspect output by eye for 3 documents. Fix cleaning issues.
-- [ ] `chunk.py`: detect section headings with regex; build section-aware chunks with metadata and context prefix.
-- [ ] Tests: `test_chunk.py` (splits on headings, respects max size, overlap correct, metadata present).
-- [ ] Insert `documents` and `chunks` rows (no embeddings yet).
-- [ ] Expand to all ~70 DGOs once 10 work.
-- [ ] **Done when:** `SELECT document_id, section_path, left(content, 80) FROM chunks LIMIT 20;` shows clean, sensible chunks.
+- [x] Read the site's terms of use before bulk downloading — done by Nav 2026-09-27.
+- [x] (Done while writing `download.py`, 2026-09-27) Explore the pages by hand first: Inspect the listing links and the element holding the policy text on one DGO page; try `httpx` + `BeautifulSoup` in `uv run python`.
+- [x] **Done 2026-09-27:** all 113 DGO pages saved in `data/raw/` (gitignored), `data/manifest.csv` has 113 rows; duplicate old/new listings resolved to the newest version (Section 2). Run: `uv run python ingest/download.py` (10 starter orders) or `--all`. Original spec: `download.py`: scrape the General Orders listing for `/general-orders/` links; download **10 DGO pages first** to `data/raw/DGO-x.xx.html` (skip if already saved; User-Agent; 1–2 s delay); write `manifest.csv` (doc_id, title, source_url, revised_date, effective_date from the listing text, downloaded_at). Build `doc_id` from the order number, not the URL slug.
+- [x] **Done 2026-09-27:** `parse.py` writes `data/parsed/DGO-x.xx.json` (gitignored) with one entry per section (`number`, `heading`, `text`). Run: `uv run python -m ingest.parse` (10 starter), `--all`, or `DGO-10.11 --print` (readable Markdown; redirect to a `.md` file to preview in VS Code). Findings across all 113 pages: policy text is always in `#policy-content div.field--name-body`; headings are `<h2>`/`<h3>` tags in two styles (new `10.11.05 TITLE`, old `III. TITLE` — 44 orders); sub-item labels (A./1./a.) are drawn by CSS, not in the text, so the parser rebuilds them (verified: 10.11.05 items A–E match the text's own reference to "10.11.05 C"); tables are rendered one row per line with every value labelled by its column header; DGO 6.16 wraps sections inside a `<p>` (handled). Known leftover: 6.08's `III PROCEDURES` heading (no dot) gets no number; text is kept. `ingest/__init__.py` added so modules run with `python -m`.
+- [x] Inspect output by eye for 3 documents (10.11, 5.21, 5.01) — done by Nav 2026-09-27; fixed table cells and header labels along the way.
+- [x] **Done 2026-09-27:** `chunk.py` (see "As built" in Section 3). Sections come from `parse.py`'s HTML headings, so no heading regex is needed; top-level items are detected per line. Run: `uv run python -m ingest.chunk` (stats), `--all`, or `DGO-10.11 --print`. Doesn't write files; `load.py` imports it.
+- [x] **Done 2026-09-27:** `tests/test_chunk.py`, 9 tests (short section = 1 chunk, nested lines stay with their item, splits between items not mid-item, max size respected, overlap correct, line breaks kept, metadata + indexes, embedding prefix). Run: `uv run pytest` (`pyproject.toml` has `[tool.pytest.ini_options] pythonpath = ["."]` so tests can import `ingest`).
+- [x] **Done 2026-09-27:** `ingest/load.py` + `app/db.py` (`get_connection()`, reads `DATABASE_URL` from `.env`, autocommit + explicit transactions). Each order loads in its own transaction (upsert document, replace chunks); orders whose chunks are unchanged are skipped, so re-running never wipes embeddings. `sql/schema.sql` gained `documents.revised_date` plus an `ALTER TABLE … ADD COLUMN IF NOT EXISTS` so the file is safe to re-run (`docker exec -i sf-policy-rag-db psql -U postgres -d sf_policy_rag < sql/schema.sql`). Run: `uv run python -m ingest.load` or `--all`.
+- [x] Expanded to all 113 DGOs — done 2026-09-27: 113 documents, 857 chunks.
+- [x] **Done when:** `SELECT document_id, section_path, left(content, 80) FROM chunks LIMIT 20;` shows clean, sensible chunks — confirmed by Nav 2026-09-27. (Tips learned: add `ORDER BY document_id, chunk_index` since tables have no built-in order; `-P pager=off` avoids psql's pager, or press `q` to exit it.)
 
-### Weeks 3–4 — Basic RAG (command line)
-- [ ] `embed.py`: batch-embed chunks (~50 per API call — 100 chunks × ~525 tokens would exceed the 30K tokens/min limit in a single call), pausing between calls if needed; store vectors; skip already-embedded chunks. Full corpus ≈ 30 min.
+### Weeks 3–4 — Basic RAG (command line) (current phase)
+- [ ] `embed.py`: batch-embed chunks (~50 per API call — 100 chunks × ~525 tokens would exceed the 30K tokens/min limit in a single call), pausing between calls if needed; store vectors; skip already-embedded chunks (so a run cut off by the daily cap resumes next day). Full corpus ≈ 13–15 min (~790 chunks, ~330K tokens; see Section 4).
 - [ ] `retrieval.py`: embed question → `ORDER BY embedding <=> query_vec LIMIT 5` (exact scan, no index — see Section 5).
 - [ ] `generate.py`: build prompt from Section 3 template, call LLM, return answer + citation list.
 - [ ] `ask.py` CLI: prints retrieved chunks (with section paths) **and** the answer.
@@ -448,7 +451,7 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
 - [ ] CI badge.
 
 ### Resume bullets (fill in real numbers)
-- Built **SF Police Policy Explorer**, a retrieval-augmented Q&A system over 70+ SFPD General Orders using Python, FastAPI, and Postgres/pgvector; deployed with CI/CD via GitHub Actions.
+- Built **SF Police Policy Explorer**, a retrieval-augmented Q&A system over 110+ SFPD General Orders using Python, FastAPI, and Postgres/pgvector; deployed with CI/CD via GitHub Actions.
 - Designed a 100-question evaluation suite; improved answer accuracy from **[X]%** to **[Y]%** and citation accuracy to **[Z]%** through section-aware chunking and hybrid (vector + full-text) search.
 - Cut cost to **$[C]/query** and p95 latency to **[T]s**; served **[U]** users and shipped fixes driven by feedback analytics.
 
@@ -468,7 +471,7 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
 7. How would this scale to all SF codes / 1M documents / 1,000 concurrent users?
 8. How do you handle policy updates and outdated versions?
 9. Why a free-tier LLM provider, and what would you change moving to production?
-10. Hardest bug and how you found it. (Candidate: Gemini's 3072-dim embeddings exceed pgvector's 2,000-dim index limit, and why dropping the index was the right call at this scale; see Section 5.)
+10. Hardest bug and how you found it. (Candidates: Gemini's 3072-dim embeddings exceed pgvector's 2,000-dim index limit, and why dropping the index was the right call at this scale — see Section 5; or the downloader silently keeping the 1996 version of orders listed twice, caught by questioning why there were 113 orders instead of ~70 — see Section 2.)
 
 ---
 
