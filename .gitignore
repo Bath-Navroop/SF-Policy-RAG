@@ -220,3 +220,4 @@ __marimo__/
 
 # Downloaded source pages (recreate with: uv run python ingest/download.py)
 data/raw/
+data/parsed/

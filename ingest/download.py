@@ -14,7 +14,7 @@ import argparse
 import csv
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -38,22 +38,29 @@ RAW_DIR = Path("data/raw")
 
 # The record of what we downloaded. Committed to git (unlike data/raw/).
 MANIFEST_PATH = Path("data/manifest.csv")
-MANIFEST_FIELDS = ["doc_id", "title", "source_url", "revised_date", "effective_date", "downloaded_at"]
+MANIFEST_FIELDS = [
+    "doc_id",
+    "title",
+    "source_url",
+    "revised_date",
+    "effective_date",
+    "downloaded_at",
+]
 
 # Seconds to wait before each request, so we don't hammer the city's server.
 DELAY_SECONDS = 1.5
 
 # The 10 orders to start with (the examples in PLAN.md, plus 1.08 and 2.01).
 STARTER_IDS = [
-    "DGO-1.08",   # Community Policing
-    "DGO-2.01",   # General Rules of Conduct
-    "DGO-2.04",   # Complaints Against Officers
-    "DGO-5.01",   # Use of Force
-    "DGO-5.05",   # Emergency Response and Pursuit Driving
-    "DGO-5.21",   # Crisis Intervention Team
-    "DGO-6.09",   # Domestic Violence
-    "DGO-6.10",   # Missing Persons
-    "DGO-8.03",   # Crowd Control
+    "DGO-1.08",  # Community Policing
+    "DGO-2.01",  # General Rules of Conduct
+    "DGO-2.04",  # Complaints Against Officers
+    "DGO-5.01",  # Use of Force
+    "DGO-5.05",  # Emergency Response and Pursuit Driving
+    "DGO-5.21",  # Crisis Intervention Team
+    "DGO-6.09",  # Domestic Violence
+    "DGO-6.10",  # Missing Persons
+    "DGO-8.03",  # Crowd Control
     "DGO-10.11",  # Body Worn Cameras
 ]
 
@@ -115,7 +122,7 @@ def get_order_links(html: str) -> list[dict]:
     Returns one dict per order with doc_id, title, source_url, revised_date, effective_date.
     """
     soup = BeautifulSoup(html, "html.parser")
-    orders: dict[str, dict] = {}  # Keyed by doc_id so a link that appears twice is only kept once.
+    orders: dict[str, dict] = {}  # Keyed by doc_id, so each order is kept only once.
 
     for link in soup.find_all("a", href=True):
         if "/general-orders/" not in link["href"]:
@@ -128,7 +135,7 @@ def get_order_links(html: str) -> list[dict]:
 
         # Build the ID from the number in the text, not the URL (the URL for 1.08 ends in "1-08-0").
         doc_id = f"DGO-{match.group(1)}"
-        title = link_text[match.end():].strip().strip('"“”').strip()
+        title = link_text[match.end() :].strip().strip('"“”').strip()
         dates = text_after_link(link)
         revised = REVISED_RE.search(dates)
         effective = EFFECTIVE_RE.search(dates)
@@ -136,7 +143,9 @@ def get_order_links(html: str) -> list[dict]:
         order = {
             "doc_id": doc_id,
             "title": title,
-            "source_url": urljoin(LISTING_URL, link["href"]),  # Turns a relative link into a full URL.
+            "source_url": urljoin(
+                LISTING_URL, link["href"]
+            ),  # Turns a relative link into a full URL.
             "revised_date": to_iso_date(revised.group(1)) if revised else "",
             "effective_date": to_iso_date(effective.group(1)) if effective else "",
         }
@@ -185,7 +194,7 @@ def downloaded_at(doc_id: str) -> str:
     today still shows last week's date, which is when we actually got it.
     """
     mtime = raw_path(doc_id).stat().st_mtime
-    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(mtime, tz=UTC).isoformat(timespec="seconds")
 
 
 def write_manifest(orders: list[dict]) -> int:
@@ -193,12 +202,13 @@ def write_manifest(orders: list[dict]) -> int:
 
     Returns the number of rows written.
     """
+    # {**order, ...} copies each order's dict and adds one field.
     rows = [
-        {**order, "downloaded_at": downloaded_at(order["doc_id"])}  # Copy the dict and add one field.
+        {**order, "downloaded_at": downloaded_at(order["doc_id"])}
         for order in orders
         if raw_path(order["doc_id"]).exists()
     ]
-    # newline="" lets the csv module control line endings itself (avoids blank lines on some systems).
+    # newline="" lets the csv module control line endings itself (avoids stray blank lines).
     with MANIFEST_PATH.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=MANIFEST_FIELDS)
         writer.writeheader()

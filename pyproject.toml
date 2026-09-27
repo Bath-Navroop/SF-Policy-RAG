@@ -29,3 +29,8 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+# Lets tests import the project (e.g. `from ingest.chunk import ...`) when run with `uv run pytest`.
+pythonpath = ["."]
+testpaths = ["tests"]
