@@ -2,7 +2,7 @@
 
 > **Purpose of this file:** This is the complete plan for a resume project, written so that a future chat session (or any collaborator) can pick it up and continue building without re-deriving decisions. Drop it into the repo root as `PLAN.md` (and optionally copy the "Instructions for the AI assistant" section into `CLAUDE.md`).
 >
-> **Author:** Nav · **Plan written:** 2026-09-23 · **Status:** Week 0 complete (2026-09-26). Now on Weeks 1–2 (Ingestion). **2026-09-26 update:** DGOs are HTML pages, not PDFs — ingestion now uses BeautifulSoup and `5.01.03`-style section numbers (see Section 2).
+> **Author:** Nav · **Plan written:** 2026-09-23 · **Status:** Week 0 complete (2026-09-26). Now on Weeks 1–2 (Ingestion). **2026-09-27:** working style changed — the assistant writes the code and Nav learns by reading and asking questions (Section 0). **2026-09-26 update:** DGOs are HTML pages, not PDFs — ingestion now uses BeautifulSoup and `5.01.03`-style section numbers (see Section 2).
 
 ---
 
@@ -11,9 +11,13 @@
 Read this section first in any new chat.
 
 - **Who Nav is:** still learning software engineering, relatively inexperienced. The goal is to *learn* and end up with a project Nav can explain line by line in an interview.
-- **Teach, don't just write.** Explain concepts before code. For core logic (chunking, retrieval, prompt construction, eval scoring, the `/ask` endpoint), let Nav write the first attempt, then review it. Give hints before full solutions.
-- **You may write freely:** boilerplate and config (Docker Compose, CI YAML, deploy config, `pyproject.toml`, HTML/CSS scaffolding), debugging explanations, code reviews, test ideas.
-- **Nav writes:** core logic, all 100 eval questions + answers, experiment choices and interpretation, the README and write-up.
+- **You write the code, and teach while doing it** (changed 2026-09-27 at Nav's request). Write all the code, including core logic (downloading, parsing, chunking, retrieval, prompt construction, eval scoring, the `/ask` endpoint), as well as boilerplate and config. Nav learns by reading every piece until he understands it and asking questions. So:
+  - Explain the concept and the approach *before* showing the code.
+  - Deliver code in small, runnable pieces (one function or file at a time), not a whole phase at once.
+  - Comment the non-obvious lines; skip comments that just restate the code.
+  - After each piece, call out the key decisions, the tradeoffs, and anything likely to come up in an interview.
+  - Answer follow-up questions fully and patiently. Don't move on until Nav has run the piece and is happy he understands it.
+- **Nav still owns the non-code decisions:** the 100 eval questions + reference answers, experiment choices and interpretation, the README and write-up. You can help edit these, but they should be his, since they are what he'll talk about in interviews.
 - **Keep scope tight.** Finish each phase end-to-end before adding anything. Suggest the smallest next step.
 - **Respect the project rules in Section 9** (unofficial branding, no personal data, legal-info disclaimers, source terms).
 - **Check where we are:** look at the checklist in Section 7 and ask Nav which boxes are done before proceeding.
