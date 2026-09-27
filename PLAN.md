@@ -2,7 +2,7 @@
 
 > **Purpose of this file:** This is the complete plan for a resume project, written so that a future chat session (or any collaborator) can pick it up and continue building without re-deriving decisions. Drop it into the repo root as `PLAN.md` (and optionally copy the "Instructions for the AI assistant" section into `CLAUDE.md`).
 >
-> **Author:** Nav · **Plan written:** 2026-09-23 · **Status:** Not started (Week 0)
+> **Author:** Nav · **Plan written:** 2026-09-23 · **Status:** Week 0 complete (2026-09-26). Now on Weeks 1–2 (Ingestion).
 
 ---
 
@@ -166,7 +166,7 @@ The app maps `[n]` back to `source_url` + `section_path` to render clickable cit
 | Local DB | Docker Compose, image `pgvector/pgvector:pg16` | One command to start | Postgres.app |
 | PDF parsing | `pypdf` (fallback: `pdfplumber` for tricky layouts) | Simple | `unstructured` |
 | HTML parsing | `httpx` + `beautifulsoup4` | Fetch listing pages | `requests` |
-| Embeddings | **Gemini Embedding 1 or Embedding 2** (free tier: 100 RPM / 30K TPM / 1,000 RPD — either works, pick one and stick with it) | $0 on the free tier; generous daily quota easily covers embedding all ~1,000–2,000 chunks in one run if batched | OpenAI `text-embedding-3-small` (1536 dims, ~$0.02/1M tokens) — cheaper per-token if you go paid, but no free tier |
+| Embeddings | **Gemini Embedding 1 or Embedding 2** (free tier: 100 RPM / 30K TPM / 1,000 RPD — either works, pick one and stick with it; `.env.example` defaults to Embedding 1). **Decided 2026-09-26: stay with Gemini** (see local-embeddings note below) | $0 on the free tier. The binding limit is 30K tokens/min: ~1,500 chunks × ~525 tokens ≈ 790K tokens ≈ 26–30 min to embed everything, far under the 1,000 RPD cap | OpenAI `text-embedding-3-small` (1536 dims, ~$0.02/1M tokens) — cheaper per-token if you go paid, but no free tier |
 | LLM | **Gemini 3.1 Flash Lite or Gemini 3.5 Flash Lite, free tier** (`GEMINI_API_KEY`); model name in env var `LLM_MODEL` | **$0 during dev/eval**, no card required. Confirmed from account dashboard (checked 2026-09-24): 15 req/min, 250K tokens/min, **500 req/day** — enough for a full 100-question eval run in one sitting. The non-Lite "full" Flash models (3.5/3.6/3.7/3.8 Flash) are much more restricted on this account — only 5 RPM / 20 RPD — too low for eval work. | OpenAI/Anthropic paid model — no rate cap (matters once real users show up in weeks 11–12), and the paid tier doesn't use your content to improve the provider's models |
 | Keyword search | Postgres full-text (`tsvector`, GIN index) | Built in | `rank_bm25` |
 | Rate limiting | `slowapi` | Protect API credit on public demo | Custom middleware |
@@ -184,7 +184,9 @@ The app maps `[n]` back to `source_url` + `section_path` to render clickable cit
 
 **On Gemini's free tier as the LLM default:** since your generation prompt is grounded — "answer only from these sources, cite them, refuse if they don't cover it" — this is a constrained task where budget-tier models across providers tend to hold up well; the failure modes to watch (hallucinating outside the sources, wrong citation numbers) come more from prompt design and retrieval quality than raw model size. Treat this as a starting assumption to verify with your own eval numbers (see the Weeks 9–10 experiment below), not a given.
 
-**Free-tier quotas confirmed from Nav's own AI Studio dashboard (2026-09-24), replacing earlier estimates from general web sources:**
+**Local embeddings (considered 2026-09-26, deferred):** `sentence-transformers` models (e.g. `all-MiniLM-L6-v2`, 384 dims; `all-mpnet-base-v2`, 768 dims) run on the MacBook's CPU with no API calls, rate limits or cost, but are likely lower quality than Gemini's and add PyTorch as a heavy dependency. Kept as a Weeks 9–10 experiment so the eval harness can measure the difference instead of guessing.
+
+**Free-tier quotas confirmed from Nav's own AI Studio dashboard (2026-09-24; re-confirmed unchanged 2026-09-26), replacing earlier estimates from general web sources:**
 
 | Model | Category | RPM | TPM | RPD |
 |---|---|---|---|---|
@@ -203,7 +205,7 @@ Rate limits are per-account and can change — re-check `aistudio.google.com/rat
 ### Repo layout
 
 ```
-sf-police-policy-explorer/
+SF-Policy-RAG/              # GitHub: Bath-Navroop/SF-Policy-RAG
 ├── PLAN.md                 # this file
 ├── README.md
 ├── pyproject.toml
@@ -244,6 +246,13 @@ sf-police-policy-explorer/
 
 **The `vector(N)` dimension must match whatever embedding model actually produces the vectors** — 1536 for OpenAI `text-embedding-3-small`, 3072 for Gemini Embedding 1/2. Pick one before running ingestion; switching later means re-embedding everything and altering this column, not just changing an env var.
 
+**As built (2026-09-26):** `vector(3072)` for Gemini, with **no index on `embedding`**. `sql/schema.sql` in the repo is the source of truth. pgvector's HNSW and IVFFlat indexes only support up to 2,000 dimensions (applying the original schema failed with `column cannot have more than 2000 dimensions for hnsw index`). At this project's size (~1,000–2,000 chunks) no index is the better choice anyway:
+- **Accuracy:** a sequential scan is exact, so it always returns the true top-k. HNSW is approximate and can miss results.
+- **Speed:** an exact scan measured ~10–15 ms on 2,000 synthetic 3072-dim vectors — a tiny fraction of the question-embedding call (hundreds of ms) and the LLM call (1–3 s).
+- **Quality:** full dimensions keep the most embedding quality. Google reports shortened Gemini embeddings (1,536 / 768) lose only a little, but here that trade would buy nothing.
+
+**If the corpus grows** to tens of thousands of chunks, or storage gets tight on Supabase's 500 MB free tier (a 3072-dim vector is ~12 KB; 2,000 chunks ≈ 27 MB): switch the column to `halfvec(3072)` with an HNSW index (keeps all dimensions, about half the storage, works on current pgvector), or to 1,536 dims if evals show no accuracy loss. Measure with the eval harness before switching (see Weeks 9–10).
+
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -264,11 +273,11 @@ CREATE TABLE chunks (
   page_number   INT,
   chunk_index   INT NOT NULL,
   content       TEXT NOT NULL,
-  embedding     vector(1536),                -- 1536 for OpenAI text-embedding-3-small; use 3072 if embedding with Gemini Embedding 1/2
+  embedding     vector(3072),                -- 3072 = Gemini Embedding 1/2 (1536 if switching to OpenAI text-embedding-3-small)
   tsv           tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED
 );
 
-CREATE INDEX chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);
+-- No index on embedding: pgvector indexes cap at 2,000 dims (see note above).
 CREATE INDEX chunks_tsv_idx ON chunks USING gin (tsv);
 
 CREATE TABLE queries (
@@ -311,7 +320,7 @@ Rate limit `/ask` (start: 10 requests/minute per client). Validate question leng
 
 ---
 
-## 6. Costs (checked 2026-09-23, rate limits re-checked 2026-09-24 — recheck before buying)
+## 6. Costs (checked 2026-09-23, rate limits re-checked 2026-09-24 and 2026-09-26 — recheck before buying)
 
 **Expected total:** ~$0–5 for the whole 12 weeks if using Gemini's free tier for the LLM (embeddings are still pennies); ~$5–15 if using a paid LLM throughout; ~$15–20/month if paying for an always-on demo.
 
@@ -335,17 +344,19 @@ Sources: Nav's own Gemini API rate-limit dashboard (aistudio.google.com/rate-lim
 
 Each phase ends with something that works. Commit after every step. Mark boxes as you go so a future chat knows where you are.
 
-### Week 0 — Setup
-- [ ] Create accounts: GitHub, **Gemini API key (aistudio.google.com — free tier, no card)**, optionally OpenAI or Anthropic API with a spending limit, Render, Supabase.
-- [ ] Install on MacBook: Homebrew, Python 3.12+, `uv`, Git (+ SSH key on GitHub), Docker Desktop, VS Code (Python + Ruff extensions).
-- [ ] Create public GitHub repo `sf-police-policy-explorer`; add this file as `PLAN.md`, a stub `README.md`, `.gitignore`, `.env.example`.
-- [ ] `uv init`, add deps: `fastapi uvicorn psycopg[binary] pgvector httpx beautifulsoup4 pypdf google-genai openai python-dotenv slowapi pytest ruff`.
-- [ ] `docker-compose.yml` with `pgvector/pgvector:pg16`; run `docker compose up -d`; apply `sql/schema.sql`.
-- [ ] Set `LLM_MODEL` to a **Flash Lite** model (Gemini 3.1 Flash Lite or 3.5 Flash Lite) and `EMBED_MODEL` to Gemini Embedding 1 or 2 — see Section 4 for the confirmed rate limits.
-- [ ] **Done when:** you can connect to the local DB and see empty `documents` and `chunks` tables.
+### Week 0 — Setup ✅ complete 2026-09-26
+- [x] Create accounts: GitHub, **Gemini API key (aistudio.google.com — free tier, no card)**, Render, Supabase.
+- [x] Install on MacBook: Homebrew, Python 3.12+ (3.14.7 installed), `uv`, Git (+ SSH key on GitHub), Docker Desktop, VS Code (Python + Ruff extensions).
+- [x] Create public GitHub repo (named `SF-Policy-RAG`: github.com/Bath-Navroop/SF-Policy-RAG); add this file as `PLAN.md`, a stub `README.md`, `.gitignore`, `.env.example`.
+- [x] `pyproject.toml` with deps `fastapi uvicorn psycopg[binary] pgvector httpx beautifulsoup4 pypdf google-genai openai python-dotenv slowapi` (+ dev group: `pytest ruff`), written directly instead of via `uv init`; `uv sync` run locally; `uv.lock` committed.
+- [x] `docker-compose.yml` with `pgvector/pgvector:pg16`, port bound to `127.0.0.1` only (so the DB isn't reachable from shared Wi-Fi); `docker compose up -d`; applied `sql/schema.sql` (no index on `embedding` — see Section 5).
+- [x] Set `LLM_MODEL` to a **Flash Lite** model (Gemini 3.1 Flash Lite or 3.5 Flash Lite) and `EMBED_MODEL` to Gemini Embedding 1 or 2 — see Section 4 for the confirmed rate limits. (`.env.example` holds safe defaults; the real key is only in the gitignored `.env`. Verify the exact model ID strings against the Gemini API's model list on the first API call in Weeks 3–4.)
+- [x] **Done when:** you can connect to the local DB and see empty `documents` and `chunks` tables. Confirmed 2026-09-26: `documents`, `chunks`, `queries` exist; counts are 0.
+- [x] Git: commits use the GitHub noreply email (`git config --global user.email`), because GitHub blocks pushes that expose a private email. Week 0 work committed and pushed.
 - Skills refresh if needed: Python basics, Git (commit/branch/PR), terminal, HTTP/JSON, basic SQL (SQLBolt).
 
-### Weeks 1–2 — Ingestion
+### Weeks 1–2 — Ingestion (current phase)
+- [ ] Check https://www.sanfranciscopolice.org/robots.txt (and site terms) allow fetching the General Orders pages.
 - [ ] `download.py`: scrape the General Orders page for PDF links; download **10 DGOs first**; write `manifest.csv` (id, title, url, effective date if shown).
 - [ ] `parse.py`: extract text per page with pypdf; strip headers/footers/page numbers; normalize whitespace.
 - [ ] Inspect output by eye for 3 documents. Fix cleaning issues.
@@ -356,8 +367,8 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
 - [ ] **Done when:** `SELECT document_id, section_path, left(content, 80) FROM chunks LIMIT 20;` shows clean, sensible chunks.
 
 ### Weeks 3–4 — Basic RAG (command line)
-- [ ] `embed.py`: batch-embed chunks (e.g., 100 per API call), store vectors; skip already-embedded chunks. With Gemini Embedding's 1,000 RPD, batching keeps this well within one day even for all ~1,000–2,000 chunks.
-- [ ] `retrieval.py`: embed question → `ORDER BY embedding <=> query_vec LIMIT 5`.
+- [ ] `embed.py`: batch-embed chunks (~50 per API call — 100 chunks × ~525 tokens would exceed the 30K tokens/min limit in a single call), pausing between calls if needed; store vectors; skip already-embedded chunks. Full corpus ≈ 30 min.
+- [ ] `retrieval.py`: embed question → `ORDER BY embedding <=> query_vec LIMIT 5` (exact scan, no index — see Section 5).
 - [ ] `generate.py`: build prompt from Section 3 template, call LLM, return answer + citation list.
 - [ ] `ask.py` CLI: prints retrieved chunks (with section paths) **and** the answer.
 - [ ] Handle "nothing relevant" → answer says it couldn't find it.
@@ -393,6 +404,8 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
   5. Reranking top 20 → 5.
   6. Small vs larger LLM (accuracy vs cost) — e.g. Gemini Flash Lite vs a non-Lite Flash model (note: the non-Lite models' 20 req/day cap means this comparison may need to run over a couple of days, or with a paid key).
   7. **LLM provider: Gemini free tier vs a paid OpenAI/Anthropic model** — compare accuracy, cost, latency, and how each behaves when you deliberately exceed its rate limit (does `/ask` degrade gracefully?).
+  8. **Embeddings: Gemini vs local `sentence-transformers`** — retrieval hit rate, speed, cost.
+  9. **Vector storage: `vector(3072)` exact scan vs `halfvec(3072)` + HNSW vs 1,536 dims** — retrieval hit rate, latency, storage (matters mainly if the corpus grows; see Section 5).
 - [ ] Phase 2 data (optional here or stretch): add Department Bulletins and/or SF Police Code sections; measure whether accuracy drops with more sources.
 - [ ] Track cost/question and p50/p95 latency for each config.
 - [ ] **Done when:** README has a results table with ≥3 experiments, including what you kept and why.
@@ -440,7 +453,7 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
 7. How would this scale to all SF codes / 1M documents / 1,000 concurrent users?
 8. How do you handle policy updates and outdated versions?
 9. Why a free-tier LLM provider, and what would you change moving to production?
-10. Hardest bug and how you found it.
+10. Hardest bug and how you found it. (Candidate: Gemini's 3072-dim embeddings exceed pgvector's 2,000-dim index limit, and why dropping the index was the right call at this scale; see Section 5.)
 
 ---
 
@@ -452,6 +465,7 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
 - **Refuse rather than guess.** Unanswerable questions should get a clear "couldn't find this" response. Weight refusal accuracy heavily in evals.
 - **Respect source terms.** Check terms/robots before scraping; rate-limit downloads; link back to official sources.
 - **Privacy.** Don't log IPs or identities; tell users questions are logged anonymously to improve the tool.
+- **Secrets.** Real API keys and the hosted (Supabase) `DATABASE_URL` live only in the gitignored `.env` and Render's environment settings — never in `.env.example`, `docker-compose.yml` or anything else committed. The local `postgres:postgres@localhost` URL in `.env.example` is a harmless dev default.
 - **LLM provider data use.** If running on a free-tier API (e.g., Gemini), note in the README that the provider may use query content to improve their products — different from a paid tier's terms. Acceptable here since the content sent is public policy text and user questions, not personal data; revisit if that ever changes.
 - **Cost safety.** Hard spending limit on any paid API account; rate-limit the public endpoint; handle provider rate-limit errors (429s) gracefully rather than surfacing raw failures.
 
@@ -470,6 +484,7 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
 | Accidentally using a non-Lite Flash model | Only 20 req/day free — eval runs will fail fast with 429s; switch `LLM_MODEL` back to a Flash Lite variant |
 | Motivation dips | Each phase is a shippable checkpoint; post weekly progress |
 | Answers look good but are wrong | Trust eval numbers, not demos |
+| Embedding dimension exceeds pgvector's index limit | Hit in Week 0: no index at current scale; `halfvec` + HNSW or fewer dims if the corpus grows (Section 5) |
 
 ## 11. Stretch goals (after week 12)
 
