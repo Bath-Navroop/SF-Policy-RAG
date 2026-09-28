@@ -14,3 +14,8 @@ def get_connection() -> psycopg.Connection:
     if not config.DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not set. Copy .env.example to .env and fill it in.")
     return psycopg.connect(config.DATABASE_URL, autocommit=True)
+
+
+def to_pgvector(values: list[float]) -> str:
+    """Format a vector the way Postgres/pgvector reads it as text: '[0.1,0.2,...]'."""
+    return "[" + ",".join(str(value) for value in values) + "]"

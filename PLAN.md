@@ -2,7 +2,7 @@
 
 > **Purpose of this file:** This is the complete plan for a resume project, written so that a future chat session (or any collaborator) can pick it up and continue building without re-deriving decisions. Drop it into the repo root as `PLAN.md` (and optionally copy the "Instructions for the AI assistant" section into `CLAUDE.md`).
 >
-> **Author:** Nav · **Plan written:** 2026-09-23 · **Status:** Week 0 complete (2026-09-26). **Weeks 1–2 (Ingestion) complete 2026-09-27:** 113 documents and 857 chunks in local Postgres. **All 857 chunks embedded 2026-09-27** (`gemini-embedding-001`). Now on Weeks 3–4: next is `app/retrieval.py`. **2026-09-27:** working style changed — the assistant writes the code and Nav learns by reading and asking questions (Section 0). **2026-09-26 update:** DGOs are HTML pages, not PDFs — ingestion now uses BeautifulSoup and `5.01.03`-style section numbers (see Section 2).
+> **Author:** Nav · **Plan written:** 2026-09-23 · **Status:** Week 0 complete (2026-09-26). **Weeks 1–2 (Ingestion) complete 2026-09-27:** 113 documents and 857 chunks in local Postgres. **All 857 chunks embedded 2026-09-27** (`gemini-embedding-001`); `app/retrieval.py` done and tested on the 5 example questions (5/5 right order at #1). Now on Weeks 3–4: next is `app/generate.py` (see "Where we left off" in Section 7). **2026-09-27:** working style changed — the assistant writes the code and Nav learns by reading and asking questions (Section 0). **2026-09-26 update:** DGOs are HTML pages, not PDFs — ingestion now uses BeautifulSoup and `5.01.03`-style section numbers (see Section 2).
 
 ---
 
@@ -142,7 +142,7 @@ flowchart LR
 
 ### Retrieval strategy (evolves over phases)
 
-1. **v1:** vector search only, top-k = 5, cosine distance.
+1. **v1:** vector search only, top-k = 5, cosine distance. **As built 2026-09-27** in `app/retrieval.py` (`search()` takes a vector, `retrieve()` embeds the question first). **Finding:** cosine distance alone does NOT separate answerable from unanswerable questions — right #1 hits scored 0.18–0.27, but an unanswerable question ("drone pizza deliveries") still scored 0.297 (matched district boundaries / vehicle crashes / air support), and a real question's hits ran up to 0.292. Embeddings measure topic, not "answers the question". So refusal is handled by the grounded prompt ("say you couldn't find it"); a distance cutoff is at most a loose safety net, with its value picked from the ~15 labelled unanswerable eval questions, not guessed.
 2. **v2 (experiment):** hybrid — vector search top 20 + Postgres full-text search top 20, merged with **Reciprocal Rank Fusion** (score = Σ 1/(60 + rank)), keep top 5. Keyword search helps with exact terms like "DGO 5.05" or "Taser".
 3. **v3 (experiment):** rerank the top 20 with a reranker model or an LLM, keep top 5.
 
@@ -388,12 +388,16 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
 
 ### Weeks 3–4 — Basic RAG (command line) (current phase)
 - [x] **Done 2026-09-27:** all 857 chunks embedded (`gemini-embedding-001`, 3,072 dims) in one ~15-min run with no errors. Files: `app/config.py` (all settings from `.env` in one place, incl. `EMBED_DIM = 3072`; holds no secrets itself), `app/embeddings.py` (`embed_documents()` with `RETRIEVAL_DOCUMENT`, `embed_query()` with `RETRIEVAL_QUERY`; checks one 3,072-number vector per text), `ingest/embed.py` (only `WHERE embedding IS NULL`; each batch saved as it finishes, so it's resumable; retries 429/500/503 with 30/60/120/240 s backoff). **Updated after the first run:** batches of 30 and a sliding-window `RateLimiter` keeping any 60 s window under 70 requests and 26K estimated tokens (simulated worst window: 60 requests / ~24.8K tokens), ~60 chunks/min ≈ 15 min for a full run; warns when a run will use most of the daily 1,000 requests. Run: `uv run python -m ingest.embed --limit 5`, then `uv run python -m ingest.embed`. Check: `SELECT count(*), count(embedding), min(vector_dims(embedding)) FROM chunks;` → 857 / 857 / 3072.
-- [ ] `retrieval.py`: embed question → `ORDER BY embedding <=> query_vec LIMIT 5` (exact scan, no index — see Section 5).
+- [x] **Done 2026-09-27:** `app/retrieval.py` — embed question (`RETRIEVAL_QUERY`) → `ORDER BY embedding <=> query LIMIT 5` (exact scan, ~4 ms; no index — see Section 5); returns chunk + everything a citation needs (doc id/title, section path/title, effective & revised dates, source URL, distance). `to_pgvector()` moved to `app/db.py` (code in `app/` must not import from `ingest/`). Try: `uv run python -m app.retrieval "question"` (`-k 10` for more). Each question costs 1 embedding request of the 1,000/day.
+  - Results on the Section 1 examples: body cameras → 10.11.05.A-C (#1); pursuits → 5.05.02 then 5.05.05.A; complaints → 2.04.03.A, 2.04.01; de-escalation → 5.01.04.C (+ related 5.24 Disengagement at #4); dispersal orders → 8.03.03.D. Unanswerable "drone pizza deliveries" → unrelated chunks at 0.297–0.305 (see Section 3 finding).
+  - Noticed, to handle later: (a) the same section path can appear twice when a long item was split into overlapping windows (e.g. 5.05.05.E at #3 and #5) — merge repeated paths when building citations; (b) the top 5 often all come from one order, and low-value sections (purpose, admin info) fill #3–#5 — likely helped by the shared context prefix; that's what the prefix / hybrid / rerank experiments in Weeks 9–10 measure; (c) resident-phrased questions ("how do *I* file a complaint") vs. officer-facing text (DGO 2.04) — a good eval question type; (d) cosmetic: the CLI prints a dangling " — " when a chunk has no section title (fix alongside `generate.py`).
 - [ ] `generate.py`: build prompt from Section 3 template, call LLM, return answer + citation list.
 - [ ] `ask.py` CLI: prints retrieved chunks (with section paths) **and** the answer.
 - [ ] Handle "nothing relevant" → answer says it couldn't find it.
-- [ ] Try the 5 example questions from Section 1 and note failures.
+- [ ] Try the 5 example questions from Section 1 and note failures. (Retrieval half done 2026-09-27 — see above; repeat with full answers once `generate.py` exists.)
 - [ ] **Done when:** `uv run python ask.py "When must officers turn on body cameras?"` returns a cited answer.
+
+**Where we left off (2026-09-27):** everything through `app/retrieval.py` is written, run and committed-ready (commit `app/db.py`, `app/retrieval.py`, `ingest/embed.py`, `PLAN.md` if not done). To resume: open Docker Desktop, `docker compose up -d` in the repo, then check `SELECT count(*), count(embedding) FROM chunks;` → 857 / 857. Next step: `app/generate.py` — number the retrieved chunks as sources ([1]…[5], merging repeated section paths), build the Section 3 prompt with the refusal rule, call the Flash Lite model in `LLM_MODEL` (verify the exact model ID on the first call, as was done for embeddings), map `[n]` back to document + section + effective date + URL. Then `ask.py` (prints chunks + answer).
 
 ### Weeks 5–6 — Evals v1 (most important phase)
 - [ ] Read the DGOs and **write 50 questions** in `questions.jsonl` (mix per Section 5). Nav writes these personally.
@@ -469,11 +473,11 @@ Each phase ends with something that works. Commit after every step. Mark boxes a
 3. Why Postgres + pgvector instead of a dedicated vector DB?
 4. How did you build the eval set, and how do you know the LLM judge is trustworthy?
 5. Which experiment helped most? Which didn't, and why did you drop it?
-6. How do you prevent hallucinated legal claims? What happens with unanswerable questions?
+6. How do you prevent hallucinated legal claims? What happens with unanswerable questions? (Talking point: similarity scores alone didn't separate answerable from unanswerable questions — 0.27 vs 0.30 — so refusal comes from the grounded prompt, and any cutoff is tuned on labelled unanswerable questions.)
 7. How would this scale to all SF codes / 1M documents / 1,000 concurrent users?
 8. How do you handle policy updates and outdated versions?
 9. Why a free-tier LLM provider, and what would you change moving to production?
-10. Hardest bug and how you found it. (Candidates: Gemini's 3072-dim embeddings exceed pgvector's 2,000-dim index limit, and why dropping the index was the right call at this scale — see Section 5; or the downloader silently keeping the 1996 version of orders listed twice, caught by questioning why there were 113 orders instead of ~70 — see Section 2.)
+10. Hardest bug and how you found it. (Candidates: the free tier counting every embedded text as a request — found from the AI Studio dashboard after the first run, fixed with a sliding-window rate limiter; Gemini's 3072-dim embeddings exceed pgvector's 2,000-dim index limit, and why dropping the index was the right call at this scale — see Section 5; or the downloader silently keeping the 1996 version of orders listed twice, caught by questioning why there were 113 orders instead of ~70 — see Section 2.)
 
 ---
 

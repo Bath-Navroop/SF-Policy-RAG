@@ -31,7 +31,7 @@ import psycopg
 from google.genai import errors
 
 from app import config
-from app.db import get_connection
+from app.db import get_connection, to_pgvector
 from app.embeddings import embed_documents
 from ingest.chunk import embedding_text
 
@@ -54,11 +54,6 @@ SELECT_MISSING = """
 def estimate_tokens(text: str) -> int:
     """Rough token count: about 4 characters per token for English text."""
     return len(text) // 4 + 1
-
-
-def to_pgvector(values: list[float]) -> str:
-    """Format a vector the way Postgres/pgvector reads it as text: '[0.1,0.2,...]'."""
-    return "[" + ",".join(str(value) for value in values) + "]"
 
 
 def fetch_missing(conn: psycopg.Connection, limit: int | None) -> list[dict]:
