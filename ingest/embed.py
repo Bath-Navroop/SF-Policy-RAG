@@ -4,12 +4,19 @@ Run from the repo root (database running, GEMINI_API_KEY and EMBED_MODEL in .env
     uv run python -m ingest.embed --limit 5    # try a tiny batch first
     uv run python -m ingest.embed              # then everything (~15 minutes)
 
-Staying inside Gemini's free tier (checked 2026-09-26: 100 requests/min,
-30,000 tokens/min, 1,000 requests/day):
-- Chunks are sent in batches of BATCH_SIZE, one API request per batch.
-- After each batch we wait long enough to average under TOKENS_PER_MINUTE.
+Gemini's free tier for gemini-embedding-001 (checked 2026-09-26): 100 requests/min,
+30,000 tokens/min, 1,000 requests/day. Measured on the first full run (2026-09-27):
+EVERY TEXT COUNTS AS ONE REQUEST, even when 40 are sent in one API call. So a
+full run (~860 chunks) uses most of a day's 1,000 requests.
+
+How we stay inside the limits:
+- Chunks are sent in batches of BATCH_SIZE (one API call per batch).
+- A RateLimiter keeps what we've sent in ANY 60-second window under
+  REQUESTS_PER_MINUTE and TOKENS_PER_MINUTE (a "sliding window"). Just averaging
+  the rate isn't enough: the first run averaged under the limit but still had
+  ~28K of 30K tokens inside one window.
 - "Too many requests" (429) and temporary server errors are retried with
-  growing waits (exponential backoff).
+  growing waits (exponential backoff); each retry also goes through the limiter.
 
 Safe to stop and re-run at any time (Ctrl+C, an error, or the daily limit):
 every finished batch is saved immediately, and only chunks without an
@@ -28,8 +35,10 @@ from app.db import get_connection
 from app.embeddings import embed_documents
 from ingest.chunk import embedding_text
 
-BATCH_SIZE = 40  # ~20K tokens per request, safely under the 30K-per-minute limit.
-TOKENS_PER_MINUTE = 25_000  # A margin under the free tier's 30,000.
+BATCH_SIZE = 30  # ~11K tokens; two batches fit in a minute under both limits below.
+REQUESTS_PER_MINUTE = 70  # Free tier: 100. Each chunk counts as one request.
+TOKENS_PER_MINUTE = 26_000  # Free tier: 30,000. First run: our estimate was ~2% below actual.
+DAILY_REQUEST_LIMIT = 1_000
 MAX_ATTEMPTS = 5
 RETRYABLE_CODES = (429, 500, 503)  # Too many requests; server errors that usually pass.
 
@@ -68,9 +77,43 @@ def fetch_missing(conn: psycopg.Connection, limit: int | None) -> list[dict]:
     ]
 
 
-def embed_with_retry(texts: list[str]) -> list[list[float]]:
+class RateLimiter:
+    """Keeps usage in any 60-second window under a request limit and a token limit.
+
+    It remembers when each batch was sent. Before sending a new one, it drops
+    entries older than 60 seconds, adds up what's left, and if the new batch
+    wouldn't fit, sleeps until the oldest entry falls out of the window.
+    """
+
+    WINDOW_SECONDS = 60
+
+    def __init__(self, requests_per_minute: int, tokens_per_minute: int):
+        self.requests_per_minute = requests_per_minute
+        self.tokens_per_minute = tokens_per_minute
+        self.sent: list[tuple[float, int, int]] = []  # (time sent, requests, tokens)
+
+    def wait_for(self, requests: int, tokens: int) -> None:
+        """Block until sending `requests` requests / `tokens` tokens stays within the limits."""
+        while True:
+            now = time.monotonic()
+            self.sent = [entry for entry in self.sent if now - entry[0] < self.WINDOW_SECONDS]
+            used_requests = sum(entry[1] for entry in self.sent)
+            used_tokens = sum(entry[2] for entry in self.sent)
+            fits = (
+                used_requests + requests <= self.requests_per_minute
+                and used_tokens + tokens <= self.tokens_per_minute
+            )
+            if fits or not self.sent:  # An empty window always lets one batch through.
+                self.sent.append((now, requests, tokens))
+                return
+            oldest_time = self.sent[0][0]
+            time.sleep(self.WINDOW_SECONDS - (now - oldest_time) + 0.5)
+
+
+def embed_with_retry(texts: list[str], tokens: int, limiter: RateLimiter) -> list[list[float]]:
     """Call the API, retrying rate-limit and temporary errors with growing waits."""
     for attempt in range(1, MAX_ATTEMPTS + 1):
+        limiter.wait_for(requests=len(texts), tokens=tokens)  # A retry uses quota too.
         try:
             return embed_documents(texts)
         except errors.APIError as error:
@@ -93,15 +136,20 @@ def main() -> None:
         print(
             f"Model {config.EMBED_MODEL}: {len(chunks)} chunks to embed in {len(batches)} batches."
         )
+        if len(chunks) > DAILY_REQUEST_LIMIT * 0.8:
+            print(
+                f"Note: this uses ~{len(chunks)} of your {DAILY_REQUEST_LIMIT:,} requests/day. "
+                "If it stops at the daily limit, run it again tomorrow."
+            )
 
+        limiter = RateLimiter(REQUESTS_PER_MINUTE, TOKENS_PER_MINUTE)
         done = 0
         for number, batch in enumerate(batches, start=1):
             texts = [embedding_text(chunk) for chunk in batch]
             tokens = sum(estimate_tokens(text) for text in texts)
-            started = time.monotonic()
 
             try:
-                vectors = embed_with_retry(texts)
+                vectors = embed_with_retry(texts, tokens, limiter)
             except errors.APIError as error:
                 print(f"\nStopped: Gemini error {error.code}: {error.message}")
                 print(
@@ -120,12 +168,6 @@ def main() -> None:
                 f"  batch {number}/{len(batches)}: {len(batch)} chunks, "
                 f"~{tokens:,} tokens ({done}/{len(chunks)} done)"
             )
-
-            # Pace ourselves: a batch of N tokens "uses up" N / TOKENS_PER_MINUTE minutes.
-            if number < len(batches):
-                pause = tokens / TOKENS_PER_MINUTE * 60 - (time.monotonic() - started)
-                if pause > 0:
-                    time.sleep(pause)
 
         embedded, total = conn.execute("SELECT count(embedding), count(*) FROM chunks").fetchone()
     print(f"Done. {embedded} of {total} chunks now have embeddings.")
