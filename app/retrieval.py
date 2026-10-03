@@ -23,7 +23,8 @@ from app.embeddings import embed_query
 TOP_K = 5  # Starting value from PLAN.md; the Weeks 9-10 experiments try 3 / 5 / 10.
 
 SEARCH_SQL = """
-    SELECT c.id, c.document_id, d.title, c.section_path, c.section_title, c.content,
+    SELECT c.id, c.document_id, d.title, c.section_path, c.section_title, c.chunk_index,
+           c.content,
            d.effective_date, d.revised_date, d.source_url,
            c.embedding <=> %(query)s::vector AS distance
     FROM chunks c
@@ -44,11 +45,12 @@ def search(conn: psycopg.Connection, query_vector: list[float], k: int = TOP_K) 
             "doc_title": row[2],
             "section_path": row[3],
             "section_title": row[4],
-            "content": row[5],
-            "effective_date": row[6],
-            "revised_date": row[7],
-            "source_url": row[8],
-            "distance": row[9],
+            "chunk_index": row[5],
+            "content": row[6],
+            "effective_date": row[7],
+            "revised_date": row[8],
+            "source_url": row[9],
+            "distance": row[10],
         }
         for row in rows
     ]
@@ -72,7 +74,10 @@ def main() -> None:
         path = chunk["section_path"] or "(intro)"
         preview = " ".join(chunk["content"].split())[:160]
         print(f"{rank}. {chunk['document_id']} §{path}  distance {chunk['distance']:.3f}")
-        print(f"   {chunk['doc_title']} — {chunk['section_title'] or ''}")
+        title = chunk["doc_title"]
+        if chunk["section_title"]:
+            title += f" — {chunk['section_title']}"
+        print(f"   {title}")
         print(f"   {preview}...\n")
 
 
