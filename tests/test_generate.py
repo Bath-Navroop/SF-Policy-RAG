@@ -202,3 +202,12 @@ def test_call_llm_sets_timeout_and_disables_function_calling(monkeypatch):
     sent = models.configs[0]
     assert sent.http_options.timeout == generate.REQUEST_TIMEOUT_MS
     assert sent.automatic_function_calling.disable is True
+
+
+def test_legal_note_is_added_by_code_not_the_model():
+    answer = generate.Answer(
+        question="q", text="Cameras must be on [1].", citations=[], sources=[], refused=False
+    )
+    assert answer.display_text == "Cameras must be on [1].\n\nThis is not legal advice."
+    assert answer.text == "Cameras must be on [1]."  # Evals and parsing see only this.
+    assert "lawyer" not in generate.SYSTEM_PROMPT  # The conditional rule is gone.

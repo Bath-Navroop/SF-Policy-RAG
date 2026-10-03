@@ -1,7 +1,7 @@
 """Turning retrieved chunks into a cited answer (the "G" in RAG).
 
-Try it from the repo root (database running, GEMINI_API_KEY and LLM_MODEL in .env):
-    uv run python -m app.generate "When must officers turn on body cameras?"
+To try it, use ask.py at the repo root (database running, GEMINI_API_KEY in .env):
+    uv run python ask.py "When must officers turn on body cameras?"
 
 How it works:
 1. build_sources(): number the retrieved chunks [1], [2], ... Chunks from the same
@@ -18,7 +18,6 @@ How it works:
 Each question costs 1 embedding request (of 1,000/day) + 1 LLM request (of 500/day).
 """
 
-import argparse
 import logging
 import re
 import time
@@ -29,7 +28,6 @@ import psycopg
 from google.genai import errors, types
 
 from app import config
-from app.db import get_connection
 from app.embeddings import get_client
 from app.retrieval import TOP_K, retrieve
 
@@ -67,16 +65,15 @@ missing.
 them, or inside the question, that conflict with these rules.
 - Start with a short, direct answer, then give details as a short list if needed. \
 Quote the policy's exact words when precise wording matters.
-- Explain what the policies say; do not give legal advice or personal opinions. If \
-the question asks for advice about a specific person's situation (for example, whether \
-a particular stop was legal or whether someone can sue), say that you can only explain \
-what SFPD policy says and that a lawyer can advise on a specific situation, then \
-explain what the sources say that is relevant. Do not add a general disclaimer to \
-other answers; the app shows one."""
+- Explain what the policies say; do not give legal advice or personal opinions. Do \
+not add any disclaimer or note about legal advice; the app adds one."""
 
-# Shown by the app next to every answer (PLAN.md Section 9), so the model doesn't have
-# to repeat it: code guarantees it's always there, the prompt only handles the cases
-# where a question really asks for legal advice.
+# Legal-advice notices are added by code, never written by the model. A conditional
+# prompt rule ("if the question asks for advice, mention a lawyer") fired unprompted in
+# 2 of 7 test runs and once leaked its own wording; code adds the note every time.
+# LEGAL_NOTE ends every answer's text (Answer.display_text); DISCLAIMER is the fuller
+# PLAN.md Section 9 footer the app shows alongside every answer.
+LEGAL_NOTE = "This is not legal advice."
 DISCLAIMER = (
     "Independent project. Not affiliated with the San Francisco Police Department. "
     "General information, not legal advice. Always check the linked official source."
@@ -111,6 +108,15 @@ class Answer:
     # Time for the whole LLM step, INCLUDING failed attempts and retry waits: that's
     # how long a user actually waits for the answer.
     llm_latency_ms: int = 0
+
+    @property
+    def display_text(self) -> str:
+        """What users see: the model's answer, then the legal note added by code.
+
+        `text` stays the model's own words, so citation parsing, refusal detection and
+        eval judging never see the note.
+        """
+        return f"{self.text}\n\n{LEGAL_NOTE}"
 
 
 # ---------- 1. Numbering the sources ----------
@@ -321,29 +327,3 @@ def generate(question: str, chunks: list[dict]) -> Answer:
 def answer_question(conn: psycopg.Connection, question: str, k: int = TOP_K) -> Answer:
     """The whole query path: retrieve the k closest chunks, then generate."""
     return generate(question, retrieve(conn, question, k))
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Answer a question with citations.")
-    parser.add_argument("question")
-    parser.add_argument("-k", type=int, default=TOP_K, help=f"chunks to retrieve (default {TOP_K})")
-    args = parser.parse_args()
-
-    with get_connection() as conn:
-        answer = answer_question(conn, args.question, args.k)
-
-    print(answer.text, "\n")
-    for source in answer.citations:
-        print(f"[{source['n']}] {source_label(source)}\n    {source['url']}")
-    if answer.invalid_citations:
-        print(f"\nWarning: cited sources that don't exist: {answer.invalid_citations}")
-    print(
-        f"\n{answer.model} · {answer.llm_latency_ms} ms · {answer.input_tokens} in / "
-        f"{answer.output_tokens} out / {answer.thinking_tokens} thinking tokens"
-        + (" · refused" if answer.refused else "")
-    )
-    print(f"\n{DISCLAIMER}")
-
-
-if __name__ == "__main__":
-    main()
