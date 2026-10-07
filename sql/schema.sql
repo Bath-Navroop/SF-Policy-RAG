@@ -51,3 +51,13 @@ CREATE TABLE IF NOT EXISTS queries (
   feedback       SMALLINT,                   -- 1 = thumbs up, -1 = down, NULL = none
   created_at     TIMESTAMPTZ DEFAULT now()
 );
+
+-- Supabase automatically exposes tables in the public schema through its REST API (the
+-- "Data API"), where anyone with the project's public key could read or write them. This
+-- app connects to Postgres directly and never uses that API, so it's switched off in the
+-- Supabase dashboard. Row Level Security with no policies is a second lock: the API's
+-- roles can't see or change any row. The app connects as the tables' owner, which RLS
+-- doesn't apply to, so this changes nothing for the app or the local database.
+ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chunks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE queries ENABLE ROW LEVEL SECURITY;

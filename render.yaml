@@ -1,0 +1,25 @@
+# Render Blueprint: the hosting setup as code. Render reads this file when you create the
+# service with New -> Blueprint. Secrets are NOT in here: `sync: false` makes Render ask
+# for their values in the dashboard.
+services:
+  - type: web
+    name: sf-police-policy-explorer
+    runtime: python  # Python version comes from .python-version; uv.lock makes Render use uv.
+    plan: free  # Sleeps after 15 idle minutes; switch to "starter" for always-on.
+    region: oregon  # Keep the Supabase project in a nearby (US West) region.
+    buildCommand: uv sync --frozen --no-dev
+    # --proxy-headers: use the visitor's real IP (from Render's X-Forwarded-For header)
+    # for rate limiting, instead of the IP of Render's proxy.
+    startCommand: >-
+      uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port $PORT
+      --proxy-headers --forwarded-allow-ips="*"
+    healthCheckPath: /health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATABASE_URL  # Supabase "Session pooler" connection string.
+        sync: false
+      - key: LLM_MODEL
+        value: gemini-3.1-flash-lite
+      - key: EMBED_MODEL
+        value: gemini-embedding-001

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SF Police Policy Explorer</title>
+  <meta name="description" content="Ask questions about San Francisco Police Department policy. Every answer cites the exact General Order section. Unofficial, independent project.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231d4ed8'/><text x='16' y='23' font-size='19' text-anchor='middle' fill='white' font-family='Georgia,serif' font-weight='700'>§</text></svg>">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <p class="eyebrow">Unofficial · Independent project</p>
+      <h1>SF Police Policy Explorer</h1>
+      <p class="lede">
+        Ask a question about San Francisco Police Department policy. Answers come only from
+        SFPD's Department General Orders and cite the exact section, with a link to the official page.
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <form id="ask-form" class="ask" novalidate>
+      <label for="question" class="visually-hidden">Your question</label>
+      <textarea id="question" name="question" rows="3" maxlength="500"
+        placeholder="e.g. When must officers turn on their body-worn cameras?"></textarea>
+      <div class="ask-row">
+        <span id="char-count" class="hint">0 / 500</span>
+        <button type="submit" id="ask-button" class="primary">Ask</button>
+      </div>
+    </form>
+
+    <section class="examples" aria-labelledby="examples-heading">
+      <h2 id="examples-heading" class="small-heading">Try an example</h2>
+      <div class="chips">
+        <button type="button" class="chip">When must officers turn on body-worn cameras?</button>
+        <button type="button" class="chip">What does SFPD policy say about vehicle pursuits?</button>
+        <button type="button" class="chip">How do I file a complaint against an officer?</button>
+        <button type="button" class="chip">What de-escalation steps does the use-of-force policy require?</button>
+        <button type="button" class="chip">What does the crowd control policy say about dispersal orders?</button>
+      </div>
+    </section>
+
+    <div id="status" class="status" role="status" aria-live="polite" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span id="status-text"></span>
+    </div>
+
+    <div id="error" class="error" role="alert" hidden></div>
+
+    <section id="result" class="result" aria-labelledby="answer-heading" hidden>
+      <h2 id="answer-heading" class="small-heading">Answer</h2>
+      <div id="answer" class="answer"></div>
+
+      <div id="sources-block">
+        <h2 class="small-heading">Sources</h2>
+        <ol id="citations" class="citations"></ol>
+      </div>
+
+      <div id="feedback" class="feedback">
+        <span id="feedback-label">Was this answer helpful?</span>
+        <button type="button" class="thumb" data-rating="1" aria-label="Yes, this answer was helpful">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3m7-2V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3z"/></svg>
+          Yes
+        </button>
+        <button type="button" class="thumb" data-rating="-1" aria-label="No, this answer was not helpful">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17m-7 2v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z"/></svg>
+          No
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>
+        <strong>Independent project. Not affiliated with the San Francisco Police Department.</strong>
+        General information, not legal advice. Always check the linked official source.
+      </p>
+      <p>
+        Questions and answers are logged anonymously (no accounts or IP addresses) to improve the tool.
+        Questions are sent to Google's Gemini API to generate answers.
+      </p>
+      <p><a href="https://github.com/Bath-Navroop/SF-Policy-RAG">Source code on GitHub</a></p>
+    </div>
+  </footer>
+</body>
+</html>
