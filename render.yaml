@@ -10,9 +10,12 @@ services:
     buildCommand: uv sync --frozen --no-dev
     # --proxy-headers: use the visitor's real IP (from Render's X-Forwarded-For header)
     # for rate limiting, instead of the IP of Render's proxy.
+    # --no-access-log: uvicorn's per-request log line includes the visitor's IP, and
+    # PLAN.md Section 9 says IPs are never logged. app/main.py logs its own line per
+    # question (query_id, latency, ...) without one. Also hides the /health checks.
     startCommand: >-
       uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port $PORT
-      --proxy-headers --forwarded-allow-ips="*"
+      --proxy-headers --forwarded-allow-ips="*" --no-access-log
     healthCheckPath: /health
     envVars:
       - key: GEMINI_API_KEY

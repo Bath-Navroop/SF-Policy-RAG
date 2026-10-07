@@ -4,12 +4,15 @@
 >
 > **Author:** Nav · **Plan written:** 2026-09-23 · **Split into PLAN.md + NOTES.md:** 2026-10-03
 
-## Current state (2026-10-03)
+## Current state (2026-10-06)
 
-- **Done:** Weeks 0–4. 113 DGOs → 857 chunks in local Postgres, all embedded (`gemini-embedding-001`, 3,072 dims). Retrieval, cited answers (`gemini-3.1-flash-lite`) and the `ask.py` CLI work; the 5 example questions are answered with citations and the unanswerable one is refused. `uv run pytest` → 41 passed.
-- **Next:** Weeks 5–6 evals — Nav writes the eval questions in `evals/questions.jsonl` (format and mix in Section 5), then `run_evals.py`.
+- **Live:** https://sf-police-policy-explorer.onrender.com — Render free web service (from `render.yaml`) + Supabase free Postgres (session pooler). Tested from laptop and phone on mobile data. Order changed on 2026-10-06: Nav chose to launch the website before evals.
+- **Done:** Weeks 0–4, plus most of Weeks 7–8: `app/main.py` (`/ask`, `/feedback`, `/health`, query logging, rate limits), `web/` page, `tests/test_api.py`, Supabase + Render deploy. `uv run pytest` → 63 passed.
+- **Also done (2026-10-06):** `--no-access-log` on the Render start command (uvicorn's access log printed visitor IPs — Section 9); CI in `.github/workflows/ci.yml` (ruff + format check + pytest on every push/PR).
+- **Still open from Weeks 7–8:** `/metrics`; CI badge in README.
+- **Then:** Weeks 5–6 evals — Nav writes the eval questions in `evals/questions.jsonl` (format and mix in Section 5), then `run_evals.py`.
 - **Known limitation (fix deferred):** `chunk.py` item paths are unreliable in 7 sections — see NOTES.md §9 (proposed fix recorded there; Nav OK'd re-embedding if it's done).
-- **To resume:** open Docker Desktop → `docker compose up -d` → `SELECT count(*), count(embedding) FROM chunks;` should give 857 / 857. Check `git status` — Weeks 3–4 work was ready to commit (`ask.py app/ tests/ PLAN.md`).
+- **To resume:** open Docker Desktop → `docker compose up -d` → `SELECT count(*), count(embedding) FROM chunks;` should give 857 / 857. Local site: `uv run uvicorn app.main:app --reload` → http://127.0.0.1:8000. Production deploys automatically on every push to `main`.
 
 ---
 
@@ -52,7 +55,7 @@ Read this section first in any new chat.
 **Why this is a strong resume project:** real, public, local data people care about; exact section numbers make **citation accuracy automatically scorable**; it shows full-stack AI engineering (ingestion, vector DB, retrieval, LLM, evals, API, deployment, CI, monitoring, real users).
 
 **Definition of done:**
-- [ ] Public live URL, answers include clickable citations + document effective dates.
+- [x] Public live URL, answers include clickable citations + document effective dates. (2026-10-06)
 - [ ] 100-question eval set with results for ≥3 experiments in a README table.
 - [ ] Tests + CI (GitHub Actions) run on every push.
 - [ ] README with architecture diagram, demo GIF/video, eval results, setup steps.
@@ -126,10 +129,10 @@ flowchart LR
 | Retriever | Vector search (v1); hybrid + rerank later | `app/retrieval.py` | ✅ v1 |
 | Generator | Prompt building, LLM call, citation parsing | `app/generate.py` | ✅ |
 | CLI | Ask a question, see chunks + answer + timing | `ask.py` | ✅ |
-| API | FastAPI: `/ask`, `/feedback`, `/health`, `/metrics` | `app/main.py` | Weeks 7–8 |
-| Web UI | Search box, answer, citation cards, thumbs up/down | `web/` | Weeks 7–8 |
+| API | FastAPI: `/ask`, `/feedback`, `/health` (+ `/metrics` later) | `app/main.py` | ✅ (no `/metrics` yet) |
+| Web UI | Search box, answer, citation cards, thumbs up/down | `web/` | ✅ |
 | Eval harness | Run questions, score, save results | `evals/` | Weeks 5–6 |
-| CI | Lint, test, small eval smoke test | `.github/workflows/ci.yml` | Weeks 7–8 |
+| CI | Lint, format check, tests (eval smoke test later) | `.github/workflows/ci.yml` | ✅ |
 
 ### Key design decisions (details and reasoning in NOTES.md)
 
@@ -204,6 +207,8 @@ SF-Policy-RAG/              # GitHub: Bath-Navroop/SF-Policy-RAG
 ├── README.md
 ├── pyproject.toml
 ├── docker-compose.yml
+├── render.yaml             # Render Blueprint (hosting as code)
+├── .python-version         # 3.14, used by Render
 ├── .env.example            # GEMINI_API_KEY=, OPENAI_API_KEY=, DATABASE_URL=, LLM_MODEL=, EMBED_MODEL=
 ├── .github/workflows/ci.yml
 ├── data/
@@ -218,7 +223,7 @@ SF-Policy-RAG/              # GitHub: Bath-Navroop/SF-Policy-RAG
 │   ├── load.py
 │   └── embed.py
 ├── app/
-│   ├── main.py             # FastAPI routes (Weeks 7–8)
+│   ├── main.py             # FastAPI routes + serves web/
 │   ├── config.py
 │   ├── db.py
 │   ├── embeddings.py
@@ -226,6 +231,7 @@ SF-Policy-RAG/              # GitHub: Bath-Navroop/SF-Policy-RAG
 │   └── generate.py
 ├── web/
 │   ├── index.html
+│   ├── style.css
 │   └── app.js
 ├── evals/
 │   ├── questions.jsonl
@@ -239,7 +245,7 @@ SF-Policy-RAG/              # GitHub: Bath-Navroop/SF-Policy-RAG
     ├── test_generate.py    # done (30 tests, no API calls)
     ├── test_ask.py         # done (2 tests, no API calls)
     ├── test_parse.py
-    └── test_api.py
+    └── test_api.py         # done (22 tests, no API calls / DB)
 ```
 
 ### Database schema
@@ -330,13 +336,14 @@ Setup, ingestion of all 113 DGOs, embeddings, retrieval, cited generation and th
 - [ ] **Done when:** one command produces a baseline score table. Record it in README.
 
 ### Weeks 7–8 — API, UI, tests, CI, deploy
-- [ ] FastAPI `/ask`, `/feedback`, `/health`, `/metrics` per Section 5; log every query to `queries`.
-- [ ] Rate limit with slowapi; validate input length; friendly error messages (including when the LLM provider rate-limits you).
-- [ ] `web/index.html` + `app.js`: question box, answer, citation cards (title, section, effective date, link), thumbs up/down, "still thinking…" state, visible disclaimer.
-- [ ] Tests: `test_api.py` with FastAPI TestClient (mock the LLM call).
-- [ ] CI: ruff + pytest on every push; optional 5-question eval smoke test using a repo secret.
-- [ ] Supabase: enable `vector` extension, apply schema, run ingestion against it.
-- [ ] Render: deploy from GitHub; set env vars (never commit secrets).
+- [x] FastAPI `/ask`, `/feedback`, `/health` per Section 5; log every query to `queries`. (2026-10-06)
+- [ ] `/metrics` (p50/p95 latency, query count, % thumbs up).
+- [x] Rate limit with slowapi; validate input length; friendly error messages (including when the LLM provider rate-limits you).
+- [x] `web/index.html` + `style.css` + `app.js`: question box, answer, citation cards (title, section, effective date, link), thumbs up/down, "still thinking…" state, visible disclaimer.
+- [x] Tests: `test_api.py` with FastAPI TestClient (pipeline and DB faked).
+- [x] CI: ruff + pytest on every push (2026-10-06); optional 5-question eval smoke test using a repo secret — later.
+- [x] Supabase: schema applied (creates `vector`), data copied from local with `pg_dump --data-only` (no re-embedding), Data API off + RLS on. (2026-10-06)
+- [x] Render: Blueprint (`render.yaml`) from GitHub; `GEMINI_API_KEY` and `DATABASE_URL` set in Render only. (2026-10-06)
 - [ ] **Done when:** public URL works and CI badge is green.
 
 ### Weeks 9–10 — Experiments

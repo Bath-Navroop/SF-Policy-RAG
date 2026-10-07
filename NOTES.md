@@ -17,6 +17,7 @@
 | 2026-09-28 | Decided rules go in the system instruction, sources + question in the user message. Retrieval CLI cosmetic fix |
 | 2026-10-02 | `app/generate.py` done; cited answers work end to end; LLM model ID `gemini-3.1-flash-lite` verified |
 | 2026-10-03 | Legal note moved from prompt to code. `ask.py` done. Weeks 3–4 complete. `chunk.py` section-path oddities deferred as a known limitation. PLAN.md split into PLAN.md + NOTES.md |
+| 2026-10-06 | Nav chose to launch before evals. FastAPI app, web page, API tests (63 passing); Supabase + Render deploy. **Live at https://sf-police-policy-explorer.onrender.com**, tested from phone. Then `--no-access-log` and GitHub Actions CI |
 
 ---
 
@@ -230,3 +231,48 @@ In DGO 1.02 §I (9 chunks), 3.02.03 (5), 5.01.07 (2) and 6.10.05 (2), every chun
   - The first real answer taking 77 s — a Gemini 503 retry plus the SDK having no default timeout, fixed with a 30 s timeout that is retried like a server error (§6).
   - Broken HTML nesting on a few pages producing misleading item paths, and choosing to defer the fix with section-level eval matching (§9).
 - **Why Postgres + pgvector:** text, metadata, vectors and full-text search in one DB; exact scan is fast and exact at this size (§4).
+
+---
+
+## 12. Launch: API, web page and deploy (2026-10-06)
+
+Nav chose to build and launch the website before Weeks 5–6 evals, so it can be used from any device.
+
+### `app/main.py` (FastAPI)
+- **Routes:** `POST /ask` → `answer_question()` + log to `queries`, returns `{answer (display_text), refused, citations[{n, document_id, title, section, date, url}], disclaimer, query_id}`; `POST /feedback` `{query_id, rating: 1 | -1}` → `UPDATE queries SET feedback`; `GET /health` runs `SELECT 1` (so a ping also keeps Supabase awake); `StaticFiles` serves `web/` at `/`, mounted last so API routes win.
+- **Plain `def` routes, not `async def`:** the pipeline blocks (Gemini SDK, psycopg), so FastAPI runs each request in a worker thread; an `async def` route would freeze the server during each LLM call.
+- **Validation:** Pydantic — question trimmed, 3–500 chars, else 422 before the pipeline runs; rating must be 1 or -1.
+- **Rate limits (slowapi):** per visitor `10/minute;50/day`; site-wide `14/minute;450/day` (Gemini free tier is 15 RPM / 500 RPD for the whole app; ~50/day left for Nav's testing); feedback `30/minute`. Counters are in memory → reset when Render restarts the app (acceptable for a demo).
+- **Real visitor IP behind Render's proxy:** uvicorn `--proxy-headers --forwarded-allow-ips="*"`. Known limit: a visitor could spoof `X-Forwarded-For` to dodge the per-visitor limit; the site-wide limit still protects the quota. IPs are used only for in-memory counting, never stored.
+- **Errors:** Gemini 429/500/503/timeout after `call_llm`'s retries → 503 "busy"; other Gemini errors → generic 500 (details only in server log); `psycopg.OperationalError` → 503 "database isn't reachable". A failed `queries` insert doesn't lose the answer (`query_id: null`, page hides the thumbs).
+- **What's logged:** question, the model's own text (without the code-added legal note — matches what evals read), all retrieved chunk ids, total latency, input tokens, output + thinking tokens, `cost_usd = 0` (free tier). One DB connection per request (fine at ≤14 req/min; a pool is a later improvement).
+- **First run (local DB):** body-camera question 4.1 s total (~0.4 s embedding, ~3.6 s Gemini), 5 sources shown / 1 cited. Against Supabase: 2.6 s, 4 of 5 cited.
+
+### `web/` (index.html, style.css, app.js — no framework)
+- Example-question chips, character counter, Enter to ask (Shift+Enter = new line), wait messages ("Searching…" → "Still thinking…" at 4 s → cold-start note at 15 s), citation cards with effective date + link to the official page, thumbs up/down, disclaimer + anonymous-logging + "sent to Gemini" note in the footer. Dark mode via `prefers-color-scheme`; works at phone width.
+- **Security decision:** the answer is untrusted LLM output, so it is never inserted with `innerHTML` (XSS). `renderAnswer()`/`appendInline()` build elements and text nodes for paragraphs, bullet/numbered lists, `**bold**` and `[n]`/`[1, 3]` citation links (same pattern as `CITATION_PATTERN`). Citation links only for `https://` URLs. Checked with a fake answer containing `<img src=x onerror=alert(1)>` — rendered as text.
+
+### `tests/test_api.py` — 22 tests, no API calls, no database
+Happy path + response shape; logged row (no legal note, no IP); 422s don't call the pipeline; per-visitor and site-wide rate limits (`TestClient(client=(ip, port))` fakes visitors); Gemini 503 → busy; other Gemini error → 500 without details; DB down → 503; logging failure still answers; feedback ok / 422 / 404; `/health` ok / 503; `/` and `/app.js` served. A fixture resets the limiter between tests. Total suite: 63 passed.
+
+### Supabase (free)
+- Project in US West. **Data API switched off** (Integrations → Data API) — Supabase otherwise exposes `public` tables over REST to anyone with the public key. `schema.sql` also enables **RLS with no policies** on all three tables as a second lock; the app connects as the tables' owner, which RLS doesn't apply to.
+- Connection: **Session pooler** string (`postgres.<project-ref>@aws-…pooler.supabase.com:5432`) — the direct connection is IPv6-only on the free plan, which Render can't reach. Found under Connect → "Direct / Connection string" tab (the panel opens on "Framework").
+- Data copied without re-embedding (saves ~857 of the day's 1,000 embedding requests): `pg_dump --data-only --table=documents --table=chunks | psql "$SUPABASE_DB_URL" --single-transaction`, run through the Docker container's own `pg_dump`/`psql`. Result: COPY 113 / COPY 857; check query 857 / 857 / 3072.
+- Secret handling: the URL was loaded with `read -rs` (hidden, not in shell history). First attempt stored only 50 characters — a line break in the pasted text stopped `read`; fixed by reading the template (no password) and the password separately and substituting `[YOUR-PASSWORD]` in the shell.
+
+### Render (free)
+- `render.yaml` Blueprint: `runtime: python` (version from `.python-version` = 3.14; `uv.lock` makes Render use uv), build `uv sync --frozen --no-dev`, start `uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"`, `healthCheckPath: /health`, `GEMINI_API_KEY` / `DATABASE_URL` as `sync: false` (entered in the dashboard, never committed). Auto-deploys on push to `main`.
+- First deploy succeeded; Render's health checker calls `/health` every few seconds. Free plan sleeps after 15 idle minutes (~1 min wake).
+- uvicorn's access log printed every visitor's IP into Render's logs (against PLAN Section 9), spotted in the first deploy log → added `--no-access-log` the same day. The app's own `query_id=… latency_ms=…` line has no IP; this also removed the `/health` line every few seconds.
+
+### CI (`.github/workflows/ci.yml`)
+- On every push to `main` and every pull request: `actions/checkout@v7` → `astral-sh/setup-uv@v10.2.0` → `uv sync --frozen` (Python from `.python-version`) → `ruff check .` → `ruff format --check .` → `pytest`.
+- No secrets needed: every test fakes Gemini and the database (checked by running the suite in a copy of the repo with no `.env`). `permissions: contents: read`.
+- setup-uv releases use full-version tags only (no floating `@v10`), so it's pinned to `v10.2.0`; versions checked with `git ls-remote --tags` on 2026-10-06.
+
+### Interview talking points
+- Why `def` routes for a blocking pipeline; why two levels of rate limit (fairness vs. a shared upstream quota); why proxy headers matter behind a load balancer and how they can be spoofed.
+- Never `innerHTML` model output — LLM text is untrusted input (prompt injection → XSS).
+- Moving 857 embeddings with `pg_dump` instead of re-embedding (quota, identical vectors, minutes vs. a day).
+- Supabase's auto-exposed REST API as a security trap; defence in depth (API off + RLS).

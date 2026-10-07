@@ -1,0 +1,32 @@
+# CI: lint and test every push to main and every pull request.
+# The tests fake Gemini and the database, so this needs no secrets and costs no API requests.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read  # Only needs to read the code.
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs uv. `uv sync` then installs the Python version in .python-version.
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Install dependencies (exact versions from uv.lock)
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Check formatting (ruff)
+        run: uv run ruff format --check .
+
+      - name: Tests (pytest)
+        run: uv run pytest
